@@ -1,0 +1,176 @@
+README file for the UVFS pmfs driver
+====================================
+
+Sept 15th 2004
+
+Introduction
+------------
+
+This file describes the UVFS pmfs kernel driver. UVFS is a user-space
+filesystem kit for linux.  It consists of a compile time configurable
+vfs kernel module which communicates with a user space program that
+implements what appears to be a conventional linux filesystem.
+
+UVFS distinguishes itself by its goals, which are to translate as
+much of the kernel vfs layer as possible to the user space interface,
+be as fast as possible
+
+UVFS is known to work on 2.4.13, 2.4.17 and 2.4.21-4.EL kernels, and
+should probably work on other 2.4.x kernels with, perhaps, some fixups.
+Somewhere in the 2.4.x series of kernels the MODULE_LICENCE macro was
+introduced.  If you build uvfs against an earlier kernel you will need
+to comment out the MODULE_LICENSE use in kernel/init.c. I have no idea
+if UVFS would work with 2.5.x kernels.  Probably it won't
+
+
+Purpose
+-------
+
+To allow a user space application to map its database objects to the
+Linux filesystem. They can then be manipulated and accessed using
+any tools and utilities that can operate on filesystem objects like
+regular files, directories, and symlinks.
+
+The user space database appplication, must be able to process 18 specific
+filesystem function requests. It must also be able to maintain the
+hierarchy of the files and directories created. A list of the function
+requests follows.
+
+    uvfs_file_write_req              write data to a file
+    uvfs_file_read_req               read data from a file
+    uvfs_create_req                  create a file by name
+    uvfs_lookup_req                  lookup a directory, file, or symlink
+    uvfs_unlink_req                  unlink or remove a file or symlink
+    uvfs_symlink_req                 create a symlink
+    uvfs_mkdir_req                   create a directory
+    uvfs_rmdir_req                   unlink or remove a directory
+    uvfs_rename_req                  rename a directory, file, or symlink
+    uvfs_readdir_req                 read and return a directory
+    uvfs_setattr_req                 set attributes of a dir, file, or symlink
+    uvfs_getattr_req                 get attributes from above
+    uvfs_statfs_req                  return statistics of the filesystem
+    uvfs_put_super_req               unmount the filesystem
+    uvfs_read_super_req              mount the filesystem
+    uvfs_readlink_req                read or traverse links to find target
+    uvfs_delete_inode                delete now unused inode
+    uvfs_shutdown_req                issue commad to server to shutdown
+
+
+Implementation
+--------------
+
+This kernel module is implemented as a vfs filesystem layer interface
+to a character device driver. The Linux kernel sees the loadable
+module as a new type of filesystem. This part of the kernel module
+supports most of the filesystem specific services like, read, write,
+lookup, set file attributes, etc. When it is operational you can
+create and remove files and directories like an normal filesystem.
+It does require that a user space server be connected to the character
+device driver side of the kernel module to provide that data backing
+store that actually implements the filesystem.
+
+This kernel module is intended to be used with the Interwoven Inc.
+TeamSite product for Linux. When paired with this product a fully
+functional filesystem is presented to the Linux user. It is also
+possible to implement ones own filesystem by writing a user space
+server that processes the vfs requests presented to the charavcter
+driver side of this kernel module. For some ideas on how to
+accomplish this, plase check out "www.sciencething.org/geekthings/index.html".
+Look at the "uvfs" section for an example of user space code.
+This driver differs somewhat in the format of the service requests.
+Look at the file "protocol.h" in the source for differences.
+
+
+History
+-------
+
+The initial version was created by Britt Park and can be found
+at www.sciencething.org. It has been expanded into a reasonably
+full featured vfs filesystem driver by Randy Petersen at Interwoven
+Inc.
+
+
+Build
+-----
+
+To build this driver on any Linux 2.4.x kernel follow these steps.
+
+1. Make sure that the two symlinks "asm" and "linux" in the source
+directory are linked to "/usr/include/asm" and "/usr/include/linux"
+respectively.
+
+2. If you have a uni-processor system then make sure that the
+__SMP__ and CONFIG_SMP are commented out of the Makefile. If you
+have a MP or SMP kernel with either an hyper-thread processor
+or 2 or more CPUs then make sure that the __SMP__ and CONFIG_SMP
+are defined.
+
+3. Now invoke "gmake depend" and then "gmake" on the Makefile.
+This will produce three componets, a) pmfs.o the Linux kernel driver,
+b) uvfs_mount the filesystem mount utility for mounting this file
+system and c) the uvfs_signal utility used to signal a shutdown of
+the server that is using the driver.
+
+
+Installation
+------------
+
+If you are using this driver with the Interwoven Inc TeamSite
+product for Linux, copy these three components to the location
+described in the TeamSite installation document. The location
+is "<iw-home>/kernel/fs".
+
+The module can be loaded via the command....
+
+/sbin/insmod -x pmfs.o
+
+Provided you have the TeamSite iwserver.linux user space server
+running you can now mount a filesystem via the following command....
+
+uvfs_mount pmfs /iwserver/default /iwmnt/default
+
+To do an unmount and shutdown you would do the following...
+
+umount /iwmnt/default
+uvfs_signal /proc/fs/pmfs shutdown
+
+The above sequence would be similar if you were using a user space
+server of your own design.
+
+
+Using driver
+------------
+
+This driver is designed to work with any user space filesystem
+emmulator or database server that wants to map its objects into
+the filesystem space.
+
+
+Feedback
+--------
+
+If after using or experimenting with this driver you have any
+useful feedback and or suggestions, please feel free to send them
+to "rpeterse@interwoven.com".
+
+
+Status
+------
+
+The driver is in a continuous process of improvements and enhancements
+and updated will appear periodically.
+
+
+Licensing
+---------
+
+The kernel driver is licenced under the GPL which should be included in
+this distribution.  The user-space interface as embodied by
+kernel/protocol.h and the rest of the code are licensed under the
+LGPL which should also be included with this distribution.  My intent
+is that anyone is allowed to cut and paste from the example filesystem
+and utilities, even if it's for a commercial product.  If you change
+the substance of the example filesystem and utilities you should feel
+obliged to make those changes available for free.
+
+
