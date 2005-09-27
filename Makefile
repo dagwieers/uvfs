@@ -1,6 +1,6 @@
 CC=/usr/bin/gcc
 CXX=/usr/bin/gcc
-CPPFLAGS = -g -O3 -Wall $(INCLUDES) $(DEFINES) -I.
+CXXFLAGS = -g -O3 -Wall $(INCLUDES) $(DEFINES) -I.
 
 LIBS = -lpthread -lc -lstdc++ -lm
 
@@ -23,10 +23,10 @@ pmfs.o : $(OBJS)
 	$(LD) -r $^ -o $@
 
 uvfs_signal : uvfs_signal.o
-	$(CXX) $(CPPFLAGS) -o uvfs_signal uvfs_signal.o $(LIBS)
+	$(CXX) $(CXXFLAGS) -o uvfs_signal uvfs_signal.o $(LIBS)
 
 uvfs_mount : uvfs_mount.o 
-	$(CXX) $(CPPFLAGS) -o uvfs_mount uvfs_mount.o $(LIBS) -lc -lstdc++ -lm
+	$(CXX) $(CXXFLAGS) -o uvfs_mount uvfs_mount.o $(LIBS)
 
 clean : 
 	rm -f $(OBJS) pmfs.o uvfs_mount.o uvfs_signal.o uvfs_mount uvfs_signal *~ #*

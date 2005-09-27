@@ -24,7 +24,7 @@
    kernel to user space. */
 
 static char const rcsid[] =
-                "$Id: pmfs VFS driver uvfs-linux-ent3.1 200409011200 Exp $";
+                "$Id: pmfs VFS driver uvfs-linux-ent3.1 2005/09/13 Exp $";
 
 /* K6 = 6, P4 = 7 */
 /* #define CONFIG_X86_L1_CACHE_SHIFT 7 */

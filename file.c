@@ -35,178 +35,41 @@
 extern void displayFhandle();
 extern struct super_block* Sb;
 
-#ifdef UVFS_IMPL_READ_WRITE
-/* Plain old write to file.  Only tricky bit is that we check to see if
-   the inode for this file has been mmapped.  If it has we fall through
-   to generic_file_write() which works through the page cache. */
 
-int uvfs_file_write(struct file* filp,
+int uvfs_file_read(struct file* file,
+                   char* buf,
+                   size_t count,
+                   loff_t* offset)
+{
+    struct dentry * dentry = file->f_dentry;
+    int ret;
+
+    dprintk("<1>uvfs_file_read(%s/%s)\n",
+            dentry->d_parent->d_name.name, dentry->d_name.name);
+
+    ret = uvfs_revalidate(dentry);
+    if (!ret)
+         return generic_file_read(file, buf, count, offset);
+    return ret;
+}
+
+
+int uvfs_file_write(struct file* file,
                     const char* buf,
                     size_t count,
                     loff_t* offset)
 {
-    uvfs_transaction_s* trans;
-    int error = 0;
-    struct inode* inode = filp->f_dentry->d_inode;
-    size_t bytesWritten = 0;
-    dprintk("<1>Entered uvfs_file_write count=%d offset=%d\n", count, *offset);
-    if ((ssize_t)count < 0)
-    {
-        dprintk("<1>return EINVAL < 0 uvfs_file_write count %d\n", count);
-        return -EINVAL;
-    }
-    if (((uvfs_inode_info_s *)inode->u.generic_ip)->flags == 1)
-    {
-        dprintk("<1>return flags file_write flags %x\n",
-              ((uvfs_inode_info_s *)inode->u.generic_ip)->flags);
-        return generic_file_write(filp, buf, count, offset);
-    }
-    dprintk("<1>file_write count %d\n", count);
-    while (bytesWritten < count)
-    {
-        uvfs_file_write_req_s* request;
-        uvfs_file_write_rep_s* reply;
-        trans = uvfs_new_transaction();
-        if (trans == NULL)
-        {
-            dprintk("<1>return ENOMEM file_write count %d\n", count);
-            return -ENOMEM;
-        }
-        request = &trans->u.request.file_write;
-        request->type = UVFS_WRITE;
-        request->serial = trans->serial;
-        request->count = count - bytesWritten;
-        if (request->count > PAGE_CACHE_SIZE)
-        {       
-            request->count = PAGE_CACHE_SIZE;
-        }
-        request->size = offsetof(uvfs_file_write_req_s, buff) + 
-            request->count;
-        request->fsid = (unsigned long)inode->i_sb->u.generic_sbp;
-        request->uid = current->fsuid;
-        request->gid = current->fsgid;
-        request->ino = inode->i_ino;
-        memcpy(&request->fh,
-               inode->u.generic_ip,sizeof(vfs_fhandle_s));
-        // displayFhandle("write",&request->fh.handle);
-        request->offset = *offset + bytesWritten;
-        dprintk("<1>uvfs_file_write: before offset + bytesWritten %d\n", request->offset);
-        copy_from_user(request->buff, buf + bytesWritten, request->count);
-        if (!uvfs_make_request(trans))
-        {
-            error = -ERESTARTSYS;
-            dprintk("<1>uvfs_file_write: return ERESTARTSYS file_write count %d\n", count);
-            goto err;
-        }
-        reply = &trans->u.reply.file_write;
-        if (reply->bytes_written == 0)
-        {
-            error = -ENOSPC;
-            dprintk("<1>uvfs_file_write: return ENOSPC file_write reply bytes_written %d\n", reply->bytes_written);
-            goto err;
-        }
-        if (reply->error < 0)
-        {
-            error = reply->error;
-            goto err;
-        }
-        bytesWritten += reply->bytes_written;
-        kfree(trans);
-    }
-    dprintk("<1>uvfs_file_write bytesWritten %d\n", bytesWritten);
-    *offset += bytesWritten;
-    dprintk("<1>uvfs_file_write after offset + bytesWritten %d\n", *offset);
-    dprintk("<1>uvfs_file_write before i_size %d\n", inode->i_size);
-    if (*offset > inode->i_size)
-    {
-        inode->i_size = *offset;
-    }
-    dprintk("<1>uvfs_file_write after i_size %d\n", inode->i_size);
-    inode->i_mtime = inode->i_ctime = inode->i_atime = CURRENT_TIME;
-    dprintk("<1>Finished uvfs_file_writing %ld\n", inode->i_ino);
-    return bytesWritten;
-err:
-    kfree(trans);
-    dprintk("<1>Finished uvfs_file_write error %d\n", error);
-    return error;
+    struct dentry * dentry = file->f_dentry;
+    int ret;
+
+    dprintk("<1>uvfs_file_write(%s/%s)\n",
+            dentry->d_parent->d_name.name, dentry->d_name.name);
+
+    ret = uvfs_revalidate(dentry);
+    if (!ret)
+         return generic_file_write(file, buf, count, offset);
+    return ret;
 }              
-
-
-/* Plain old file read.  Same trickiness as for uvfs_file_write(). */
-
-int uvfs_file_read(struct file* filp,
-                   char* buff,
-                   size_t count,
-                   loff_t* offset)
-{
-    uvfs_transaction_s* trans;
-    int error = 0;
-    struct inode* inode = filp->f_dentry->d_inode;
-    size_t bytesRead = 0;
-    dprintk("<1>Entering file_read %d\n", current->pid);
-    if ((ssize_t)count < 0)
-    {
-        return -EINVAL;
-    }
-    if (((uvfs_inode_info_s *)inode->u.generic_ip)->flags == 1)
-    {
-        dprintk("<1>return flags file_read flags %x\n",
-              ((uvfs_inode_info_s *)inode->u.generic_ip)->flags);
-        return generic_file_read(filp, buff, count, offset);
-    }
-    while (bytesRead < count)
-    {
-        uvfs_file_read_req_s* request;
-        uvfs_file_read_rep_s* reply;
-        trans = uvfs_new_transaction();
-        if (trans == NULL)
-        {
-            return -ENOMEM;
-        }
-        request = &trans->u.request.file_read;
-        request->type = UVFS_READ;
-        request->serial = trans->serial;
-        request->size = sizeof(*request);
-        request->fsid = (unsigned long)inode->i_sb->u.generic_sbp;
-        request->uid = current->fsuid;
-        request->gid = current->fsgid;
-        request->ino = inode->i_ino;
-        memcpy(&request->fh,
-               inode->u.generic_ip,sizeof(vfs_fhandle_s));
-        // displayFhandle("read",&request->fh.handle);
-        request->count = count - bytesRead;
-        if (request->count > PAGE_CACHE_SIZE)
-        {
-            request->count = PAGE_CACHE_SIZE;
-        }
-        request->offset = *offset + bytesRead;
-        if (!uvfs_make_request(trans))
-        {
-            error = -ERESTARTSYS;
-            goto out;
-        }
-        reply = &trans->u.reply.file_read;
-        if (reply->error < 0)
-        {
-            error = reply->error;
-            goto out;
-        }
-        if (reply->bytes_read == 0)
-        {
-            kfree(trans);
-            break;
-        }
-        copy_to_user(buff + bytesRead, reply->buff, reply->bytes_read);
-        bytesRead += reply->bytes_read;
-        kfree(trans);
-    }
-    *offset += bytesRead;
-    return bytesRead;
-out:
-    kfree(trans);
-    return error;
-}
-#endif
 
 
 /* Called by page cache aware write functions. */
@@ -345,7 +208,6 @@ int uvfs_readpage(struct file* filp, struct page* pg)
     dprintk("<1>Exited readpage OK\n");
     return 0;
 err:
-    kunmap(pg);
     UnlockPage(pg);
     kfree(trans);
     dprintk("<1>Exited readpage error=%d\n", error);
@@ -899,7 +761,7 @@ int uvfs_mmap(struct file* filp, struct vm_area_struct* vma)
 
     ((uvfs_inode_info_s *)filp->f_dentry->d_inode->u.generic_ip)->flags = 1;
 
-    printk("uvfs_mmap(%s/%s)\n",
+    dprintk("uvfs_mmap(%s/%s)\n",
              dentry->d_parent->d_name.name, dentry->d_name.name);
 
     status = uvfs_revalidate(dentry);

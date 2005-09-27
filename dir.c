@@ -48,6 +48,18 @@ void uvfs_set_inode(struct inode* inode,
 {
     dprintk("<1>uvfs_set_inode: mode 0x%x   0x%x %ld\n",
            a->i_mode, (unsigned)inode, inode->i_ino);
+
+    if (caller == UVFS_LOOKUP)
+    {
+        if (S_ISREG(inode->i_mode) && inode->i_mtime != a->i_mtime)
+        {
+            dprintk("<1>uvfs_set_inode(%s/%s) old_mtime=%d, new_mtime=%d\n",
+                    dentry->d_parent->d_name.name, dentry->d_name.name,
+                    (int)inode->i_mtime, (int)a->i_mtime);
+            invalidate_inode_pages(inode);
+        }
+    }
+
     inode->i_mode = a->i_mode;
     inode->i_nlink = a->i_nlink;
     inode->i_uid = a->i_uid;

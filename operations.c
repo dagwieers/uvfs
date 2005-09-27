@@ -41,13 +41,8 @@ struct file_operations Uvfs_file_file_operations =
     kvec_read: uvfs_kvec_read,
     kvec_write: uvfs_kvec_write,
 #endif
-#ifdef UVFS_IMPL_READ_WRITE
     read: uvfs_file_read,
     write: uvfs_file_write,
-#else
-    read: generic_file_read,
-    write: generic_file_write,
-#endif /* UVFS_IMPL_READ_WRITE */
     mmap: uvfs_mmap,
     open: uvfs_open,
 #ifdef UVFS_AIO
