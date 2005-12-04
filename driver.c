@@ -24,7 +24,7 @@
    kernel to user space. */
 
 static char const rcsid[] =
-                "$Id: pmfs VFS driver uvfs-linux-ent3.1 2005/09/13 Exp $";
+                "$Id: pmfs VFS driver uvfs-linux-ent3.1 2005/11/09 Exp $";
 
 /* K6 = 6, P4 = 7 */
 /* #define CONFIG_X86_L1_CACHE_SHIFT 7 */
@@ -354,11 +354,11 @@ int uvfs_make_request(uvfs_transaction_s* trans)
         {
             schedule();
         }
-        dprintk("Entering uvfs_make_request 0\n");
-        return 0;
+        dprintk("Exiting uvfs_make_request 0\n");
+        return 1;
     }
     spin_unlock(&Uvfs_lock);
-    dprintk("Entering uvfs_make_request 1\n");
+    dprintk("Exiting uvfs_make_request 1\n");
     return 1;
 }
 
