@@ -45,6 +45,7 @@ struct file_operations Uvfs_file_file_operations =
     write: uvfs_file_write,
     mmap: uvfs_mmap,
     open: uvfs_open,
+    fsync: file_fsync,
 #ifdef UVFS_AIO
     aio_read: generic_file_aio_read,
     aio_write: generic_file_aio_write
