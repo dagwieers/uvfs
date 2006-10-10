@@ -1,74 +1,57 @@
 /*
- *   linux/fs/uvfs/driver.c
+ *   driver.c -- conduit from kernel to user space
  *
- *   Copyright 2002-2004 Interwoven Inc.
- *   
- *   initial  prototype  version: 0.5 02/22/02 Britt Park Interwoven Inc.
- *   iwserver compatible version: 1.0 09/15/04 Randy Petersen Interwoven Inc.
+ *   Copyright (C) 2002      Britt Park
+ *   Copyright (C) 2004-2006 Interwoven, Inc.
  *
- *   This program is free software;  you can redistribute it and/or modify
+ *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
  *   the Free Software Foundation; either version 2 of the License, or
  *   (at your option) any later version.
- *   
+ *
  *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY;  without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
- *   the GNU General Public License for more details.
- *   
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
  *   You should have received a copy of the GNU General Public License
- *   along with this program;  if not, write to the Free Software 
+ *   along with this program; if not, write to the Free Software
  *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
-/* driver.c -- Implementation of the serial device that acts as conduit from
-   kernel to user space. */
 
-static char const rcsid[] =
-                "$Id: pmfs VFS driver uvfs-linux-ent3.1 2006/01/27 Exp $";
-
-/* K6 = 6, P4 = 7 */
-/* #define CONFIG_X86_L1_CACHE_SHIFT 7 */
-
-#define __NO_VERSION__
 #include <linux/module.h>
-#include <linux/fs.h>
-#include <linux/time.h>
+#include <linux/proc_fs.h>
+#include "uvfs.h"
 
-#include <asm/uaccess.h>
+static int uvfsd_open(struct inode *, struct file *);
+static int uvfsd_release(struct inode *, struct file *);
+static ssize_t uvfsd_read(struct file *, char *, size_t, loff_t *);
+static ssize_t uvfsd_write(struct file *, const char *, size_t, loff_t *);
+static int uvfsd_ioctl(struct inode *, struct file *, unsigned int, unsigned long);
 
-#include "driver.h"
-
-static int uvfsd_read(struct file* filp,
-                      char* buff,
-                      size_t count,
-                      loff_t* offset);
-static int uvfsd_write(struct file* filp,
-                       const char* buff,
-                       size_t count,
-                       loff_t* offset);
-static int uvfsd_ioctl(struct inode* inode, struct file* file,
-                       unsigned int cmd, unsigned long arg);
-static int uvfsd_open(struct inode*, struct file*);
-static int uvfsd_release(struct inode* inode, struct file* filp);
-
-
+/*
+ * file operations defined for the pmfs
+ * device driver which appears in /proc/fs
+ *
+ */
 struct file_operations Uvfsd_file_operations =
 {
-    open: uvfsd_open,
-    release: uvfsd_release,
-    read: uvfsd_read,
-    write: uvfsd_write,
-    ioctl: uvfsd_ioctl
+    .open           = uvfsd_open,
+    .release        = uvfsd_release,
+    .read           = uvfsd_read,
+    .write          = uvfsd_write,
+    .ioctl          = uvfsd_ioctl,
 };
 
+static struct proc_dir_entry* uvfs_proc_file;
 
-wait_queue_head_t Uvfs_driver_queue;
-spinlock_t Uvfs_lock;
+static wait_queue_head_t Uvfs_driver_queue;
+static spinlock_t Uvfs_lock;
+
 static int ShuttingDown = 0;
 static int Serial_number = 0;
 
-extern int uvfs_mounted;	// mounted or not !
-
+extern int uvfs_use_count;      // module use count
 
 LIST_HEAD(Uvfs_requests);
 LIST_HEAD(Uvfs_replies);
@@ -89,33 +72,38 @@ static char* Op_names[] =
     "setattr",
     "getattr",
     "statfs",
-    "put_super",
     "read_super",
     "readlink",
-    "delete_inode",
     "shutdown",
-    "mknod",
-    "link",
     "LAST + 1"
 };
 
 
+/*
+ * open the driver for access by server file system thread
+ * driver can be opened muliple times by different threads
+ */
 static int uvfsd_open(struct inode* inode, struct file* file)
 {
     dprintk("Entering uvfsd_open\n");
-    MOD_INC_USE_COUNT;
+    uvfs_use_count++;
     dprintk("Exiting uvfsd_open\n");
     return 0;
 }
 
 
+/*
+ * close the driver from file system thread
+ * each thread must close the connection to unload driver
+ */
 static int uvfsd_release(struct inode* inode, struct file* filp)
 {
     dprintk("Entering uvfsd_release\n");
-    MOD_DEC_USE_COUNT;
-    if(GET_USE_COUNT(THIS_MODULE))
+    uvfs_use_count--;
+
+    if(uvfs_use_count)
     {
-         dprintk("Exiting uvfsd_release count %d\n",GET_USE_COUNT(THIS_MODULE));
+         dprintk("Exiting uvfsd_release count %d\n",uvfs_use_count);
          return 0;
     }
 
@@ -129,11 +117,12 @@ static int uvfsd_release(struct inode* inode, struct file* filp)
 
 /* Reads are user space queries for fs request. */
 
-static int uvfsd_read(struct file* filp,
-                      char* buff,
-                      size_t count,
-                      loff_t* offset)
+static ssize_t uvfsd_read(struct file* filp,
+                          char* buff,
+                          size_t count,
+                          loff_t* offset)
 {
+    int ret = 0;
     uvfs_transaction_s* trans;
     uvfs_generic_req_s* request;
     dprintk("<1>Entered uvfsd_read (%d)\n", current->pid);
@@ -157,23 +146,30 @@ static int uvfsd_read(struct file* filp,
             spin_unlock(&Uvfs_lock);
             req.type = UVFS_SHUTDOWN;
             size = req.size = sizeof(req);
-            copy_to_user(buff, &req, req.size);
+            ret = copy_to_user(buff, &req, req.size);
             spin_lock(&Uvfs_lock);
             wake_up_interruptible(&Uvfs_driver_queue);
             spin_unlock(&Uvfs_lock);
-            return size;
+            if(ret)
+                return -EIO;
+            else
+                return size;
         }
         dprintk("<1>uvfsd_read: About to sleep for request\n");
         init_waitqueue_entry(&wait, current);
-        set_current_state(TASK_INTERRUPTIBLE);
         add_wait_queue_exclusive(&Uvfs_driver_queue, &wait);
+        dprintk("<1>uvfsd_read: add_wait_queue_exclusive\n");
+        set_current_state(TASK_INTERRUPTIBLE);
         spin_unlock(&Uvfs_lock);
         schedule();
         spin_lock(&Uvfs_lock);
+        dprintk("<1>uvfsd_read: set_current_state\n");
+        set_current_state(TASK_RUNNING);
         remove_wait_queue(&Uvfs_driver_queue, &wait);
         if (signal_pending(current))
         {
             spin_unlock(&Uvfs_lock);
+            dprintk("<1>Exited uvfsd_read: ERESTARTSYS\n");
             return -ERESTARTSYS;
         }
     }
@@ -181,34 +177,38 @@ static int uvfsd_read(struct file* filp,
     trans = list_entry(Uvfs_requests.next, uvfs_transaction_s, list);
     list_del_init(&trans->list);
     list_add_tail(&trans->list, &Uvfs_replies);
-    /* 
+    /*
        This may be overkill but I can't prove to myself that
        there isn't a possibility of a request going unanswered.
     */
     wake_up_interruptible(&Uvfs_driver_queue);
     spin_unlock(&Uvfs_lock);
     request = &trans->u.request.generic;
-    copy_to_user(buff, request, request->size);
-    dprintk("<1>Exited uvfsd_read: %d (%d)\n", 
+    ret = copy_to_user(buff, request, request->size);
+    dprintk("<1>Exited uvfsd_read: %d (%d)\n",
             request->size,
             current->pid);
-    return request->size;
+    if(ret)
+        return -EIO;
+    else
+        return request->size;
 }
-        
+
 
 /* Writes are replies from the user space filesystem implementation. */
 
-static int uvfsd_write(struct file* file,
-                       const char* buff,
-                       size_t count,
-                       loff_t* offset)
+static ssize_t uvfsd_write(struct file* file,
+                           const char* buff,
+                           size_t count,
+                           loff_t* offset)
 {
+    int ret = 0;
     uvfs_generic_rep_s reply;
     struct list_head* ptr;
     uvfs_transaction_s* trans = NULL;
     if (count < sizeof(uvfs_generic_rep_s))
     {
-        dprintk("<1>Undersized reply (%d).\n", count);
+        dprintk("<1>uvfsd_write Undersized reply (%d).\n", count);
         return -EIO;
     }
     if (copy_from_user(&reply, buff, sizeof(reply)))
@@ -216,8 +216,8 @@ static int uvfsd_write(struct file* file,
         dprintk("<1>copy_from_user failed in uvfsd_write.\n");
         return -EFAULT;
     }
-    dprintk("<1>Entered uvfsd_write: serial=%d (%d)\n", 
-            reply.serial, 
+    dprintk("<1>Entered uvfsd_write: serial=%d (%d)\n",
+            reply.serial,
             current->pid);
     if (reply.size != count)
     {
@@ -247,11 +247,14 @@ static int uvfsd_write(struct file* file,
     /* We have a transaction */
     list_del_init(&trans->list);
     spin_unlock(&Uvfs_lock);
-    copy_from_user(&trans->u.reply, buff, reply.size);
+    ret = copy_from_user(&trans->u.reply, buff, reply.size);
     wake_up_interruptible(&trans->fs_queue);
     trans->answered = 1;
     dprintk("<1>Exited uvfsd_write (%d)\n", current->pid);
-    return reply.size;
+    if(ret)
+        return -EIO;
+    else
+        return reply.size;
 }
 
 
@@ -264,7 +267,7 @@ static int uvfsd_ioctl(struct inode* inode, struct file* filp,
     {
         case UVFS_IOCTL_SHUTDOWN:
         {
-            if (GET_USE_COUNT(THIS_MODULE))
+            if (uvfs_use_count)
             {
                 dprintk("Entering uvfsd_ioctl SHUTDOWN\n");
                 spin_lock(&Uvfs_lock);
@@ -280,11 +283,11 @@ static int uvfsd_ioctl(struct inode* inode, struct file* filp,
             struct list_head* ptr;
             spin_lock(&Uvfs_lock);
             printk("<1>Pending Requests:\n");
-            for (ptr = Uvfs_requests.next; 
-                 ptr != &Uvfs_requests; 
+            for (ptr = Uvfs_requests.next;
+                 ptr != &Uvfs_requests;
                  ptr = ptr->next)
             {
-                uvfs_transaction_s* trans = 
+                uvfs_transaction_s* trans =
                     list_entry(ptr, uvfs_transaction_s, list);
                 printk("<1>SN: %d (%s)\n",
                        trans->serial, Op_names[trans->u.request.generic.type]);
@@ -294,7 +297,7 @@ static int uvfsd_ioctl(struct inode* inode, struct file* filp,
                  ptr != &Uvfs_replies;
                  ptr = ptr->next)
             {
-                uvfs_transaction_s* trans = 
+                uvfs_transaction_s* trans =
                     list_entry(ptr, uvfs_transaction_s, list);
                 printk("<1>SN: %d (%s)\n",
                        trans->serial, Op_names[trans->u.request.generic.type]);
@@ -304,12 +307,13 @@ static int uvfsd_ioctl(struct inode* inode, struct file* filp,
         }
         case UVFS_IOCTL_MOUNT:
         {
-            return (uvfs_mounted);  // server mount state
+            // make sure nothing is mounted
+            return !list_empty(&Uvfs_file_system_type.fs_supers);
         }
         case UVFS_IOCTL_USE_COUNT:
         default:
             // return number of opens active on this module
-            return (GET_USE_COUNT(THIS_MODULE));
+            return uvfs_use_count;
     }
     return 0;
 }
@@ -325,15 +329,22 @@ void safe_sleep_on(wait_queue_head_t* q, spinlock_t* s)
 
     dprintk("Entering safe_sleep_on\n");
     init_waitqueue_entry(&wait, current);
-    set_current_state(TASK_INTERRUPTIBLE);
 
+    dprintk("safe_sleep_on add_wait_exclusive\n");
     add_wait_queue_exclusive(q, &wait);
+    set_current_state(TASK_INTERRUPTIBLE);
     spin_unlock(s);
     schedule();
     spin_lock(s);
+    set_current_state(TASK_RUNNING);
+    dprintk("safe_sleep_on remove_wait_queue\n");
     remove_wait_queue(q, &wait);
+    if (signal_pending(current))
+    {
+        dprintk("<1>safe_sleep_on: ERESTARTSYS\n");
+    }
     /* Others seem to do a set_current_state(TASK_RUNNING) here. However,
-       it looks like wake_up should have already done this. Otherwise this 
+       it looks like wake_up should have already done this. Otherwise this
        thread would not have been scheduled. */
     dprintk("Exiting safe_sleep_on\n");
 }
@@ -352,18 +363,24 @@ int uvfs_make_request(uvfs_transaction_s* trans)
         spin_unlock(&Uvfs_lock);
         while (!trans->answered)
         {
+            /* while there are no requests to process run other processes */
             schedule();
         }
-        dprintk("Exiting uvfs_make_request 0\n");
-        return 1;
+        dprintk("Entering uvfs_make_request 0\n");
+        return 0;
     }
     spin_unlock(&Uvfs_lock);
-    dprintk("Exiting uvfs_make_request 1\n");
+    dprintk("Entering uvfs_make_request 1\n");
     return 1;
 }
 
 
-uvfs_transaction_s* uvfs_new_transaction()
+/*
+ * allocate a new tranaction request object and initialize it
+ * this object will need to be freed after the request is completed
+ *
+ */
+uvfs_transaction_s* uvfs_new_transaction(void)
 {
     uvfs_transaction_s* trans;
     dprintk("Entering uvfs_new_transaction\n");
@@ -385,3 +402,56 @@ uvfs_transaction_s* uvfs_new_transaction()
 }
 
 
+/*
+ * init pmfs driver, create /proc/fs/pmfs device node
+ * and register the pmfs file system type.
+ *
+ */
+static int __init uvfs_init(void)
+{
+    int result;
+    spin_lock_init(&Uvfs_lock);
+    init_waitqueue_head(&Uvfs_driver_queue);
+
+    dprintk("<1>uvfs_init(/proc/fs/%s)\n", UVFS_FS_NAME);
+
+    uvfs_proc_file =
+        create_proc_entry(UVFS_FS_NAME, S_IFREG | 0600, proc_root_fs);
+    if (uvfs_proc_file == NULL)
+    {
+        dprintk("<1>Could not create /proc/fs/%s\n", UVFS_FS_NAME);
+        return -EIO;
+    }
+    uvfs_proc_file->proc_fops = &Uvfsd_file_operations;
+    result = register_filesystem(&Uvfs_file_system_type);
+    if (result < 0)
+    {
+        remove_proc_entry(UVFS_FS_NAME, proc_root_fs);
+        return result;
+    }
+    if (uvfs_init_inodecache())
+    {
+        return -ENOMEM;
+    }
+    return 0;
+}
+
+
+/*
+ * remove /proc/fs/pmfs device node
+ * and un-register the pmfs file system type.
+ *
+ */
+static void __exit uvfs_cleanup(void)
+{
+    dprintk("<1>uvfs_cleanup(/proc/fs/%s)\n", UVFS_FS_NAME);
+    unregister_filesystem(&Uvfs_file_system_type);
+    remove_proc_entry(UVFS_FS_NAME, proc_root_fs);
+    uvfs_destroy_inodecache();
+}
+
+
+MODULE_LICENSE("GPL");
+
+module_init(uvfs_init);
+module_exit(uvfs_cleanup);

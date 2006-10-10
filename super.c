@@ -1,77 +1,439 @@
 /*
- *   linux/fs/uvfs/super.c
+ *   super.c -- superblock and inode functions
  *
- *   Copyright 2002-2004 Interwoven Inc.
- *   
- *   initial  prototype  version: 0.5 02/22/02 Britt Park Interwoven Inc.
- *   iwserver compatible version: 1.0 09/15/04 Randy Petersen Interwoven Inc.
+ *   Copyright (C) 2002      Britt Park
+ *   Copyright (C) 2004-2006 Interwoven, Inc.
  *
- *   This program is free software;  you can redistribute it and/or modify
+ *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
  *   the Free Software Foundation; either version 2 of the License, or
  *   (at your option) any later version.
- *   
+ *
  *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY;  without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
- *   the GNU General Public License for more details.
- *   
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
  *   You should have received a copy of the GNU General Public License
- *   along with this program;  if not, write to the Free Software 
+ *   along with this program; if not, write to the Free Software
  *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
-/* super.c -- Superblock functions. */
 
-#define __NO_VERSION__
-#include <linux/module.h>
-#include <linux/fs.h>
-#include <linux/locks.h>
-#include <linux/smp_lock.h>
-#include <linux/slab.h>
-#include <asm/uaccess.h>
-#include "super.h"
-#include "protocol.h"
-#include "driver.h"
-#include "operations.h"
-#include "dir.h"
+#include <linux/statfs.h>
+#include "uvfs.h"
 
-struct super_block* Sb = NULL;
 
-int uvfs_mounted = 0;	// mounted or not !
+int uvfs_use_count = 0; // module use count
 
-void displayFhandle(char* msg, vfs_fhandle_s* fh)
+
+void displayFhandle(const char* msg, uvfs_fhandle_s* fh)
 {
     printk("%s  sbxid=0x%x, inum=0x%x, mntid=0x%x, arid=0x%x\n",
             msg,
-            fh->no_sbxid,
+            fh->no_fspid.fs_sbxid,
             fh->no_fspid.fs_sfuid,
             fh->no_mntid,
             fh->no_narid.na_aruid);
 }
 
-void displayInodeInfo(char* msg, uvfs_inode_info_s* ip)
+static void init_once(void *foo, kmem_cache_t *cachep, unsigned long flags)
 {
-    displayFhandle(msg, &ip->handle);
-    printk("flags 0x%x\n", ip->flags);
+    struct uvfs_inode_info *uvfsi = foo;
+
+    if ((flags & (SLAB_CTOR_VERIFY|SLAB_CTOR_CONSTRUCTOR)) ==
+        SLAB_CTOR_CONSTRUCTOR)
+    {
+        inode_init_once(&uvfsi->vfs_inode);
+    }
 }
 
-/* Noop but VFS expects the function to exist. */
-void uvfs_read_inode(struct inode* inode)
+static kmem_cache_t *uvfs_inode_cachep;
+int uvfs_init_inodecache(void)
 {
-    dprintk("<1>Entering read_inode\n");
-    dprintk("read_inode: 0x%x i_ino 0x%x\n", (unsigned)inode, (unsigned)inode->i_ino);
-    dprintk("read_inode: 0x%x generic_ip 0x%x\n", (unsigned)inode, (unsigned)inode->u.generic_ip);
-    dprintk("<1>Exiting read_inode\n");
+    uvfs_inode_cachep = kmem_cache_create("uvfs_inode_cache",
+                        sizeof(struct uvfs_inode_info),
+                        0, SLAB_RECLAIM_ACCOUNT,
+                        init_once, NULL);
+
+    if (uvfs_inode_cachep == 0)
+    {
+        printk(KERN_ERR "uvfs_init_inodeache: "
+               "Couldn't initialize inode slabcache\n");
+        return -ENOMEM;
+    }
+
+    return 0;
+}
+
+void uvfs_destroy_inodecache(void)
+{
+    if (kmem_cache_destroy(uvfs_inode_cachep))
+        printk(KERN_INFO "uvfs_inode_cache: not all structures were freed\n");
 }
 
 
-int uvfs_statfs(struct super_block* sb, struct statfs* stat)
+struct inode *uvfs_alloc_inode(struct super_block *sb)
+{
+    struct uvfs_inode_info *uvfsi;
+
+    dprintk("<1>Entering uvfs_alloc_inode\n");
+    uvfsi = (struct uvfs_inode_info *)kmem_cache_alloc(uvfs_inode_cachep, SLAB_KERNEL);
+    if (!uvfsi)
+        return 0;
+
+    return &uvfsi->vfs_inode;
+}
+
+void uvfs_destroy_inode(struct inode *inode)
+{
+    kmem_cache_free(uvfs_inode_cachep, UVFS_I(inode));
+}
+
+/* functions passed to iget5_locked */
+static int uvfs_compare_inode(struct inode* inode, void* data)
+{
+    uvfs_fhandle_s * other = (uvfs_fhandle_s*) data;
+    uvfs_fhandle_s * extra = &UVFS_I(inode)->fh;
+
+    return (extra &&
+        extra->no_narid.na_aruid == other->no_narid.na_aruid &&
+        extra->no_fspid.fs_sfuid == other->no_fspid.fs_sfuid &&
+        extra->no_fspid.fs_sbxid == other->no_fspid.fs_sbxid);
+
+}
+
+static int uvfs_init_inode(struct inode* inode, void* data)
+{
+    UVFS_I(inode)->fh = *((uvfs_fhandle_s*)data);
+
+    return 0;
+}
+
+struct inode *
+uvfs_iget(struct super_block *sb, uvfs_fhandle_s *fh, uvfs_attr_s *fattr)
+{
+    struct inode *inode = NULL;
+    unsigned long hash;
+
+    hash = (unsigned long) fh->no_fspid.fs_sfuid;
+    inode = iget5_locked(sb, hash, &uvfs_compare_inode, &uvfs_init_inode, fh);
+    if (inode == NULL)
+    {
+        printk("uvfs_iget: iget5_locked failed\n");
+        return inode;
+    }
+    if (inode->i_state & I_NEW)
+    {
+        inode->i_ino = hash;
+
+        inode->i_flags |= S_NOATIME|S_NOCMTIME;
+
+        inode->i_mode = fattr->i_mode;
+        inode->i_nlink = fattr->i_nlink;
+        inode->i_uid = fattr->i_uid;
+        inode->i_gid = fattr->i_gid;
+        inode->i_size = fattr->i_size;
+        inode->i_atime.tv_sec = fattr->i_atime.tv_sec;
+        inode->i_atime.tv_nsec = fattr->i_atime.tv_nsec;
+        inode->i_mtime.tv_sec = fattr->i_mtime.tv_sec;
+        inode->i_mtime.tv_nsec = fattr->i_mtime.tv_nsec;
+        inode->i_ctime.tv_sec = fattr->i_ctime.tv_sec;
+        inode->i_ctime.tv_nsec = fattr->i_ctime.tv_nsec;
+        inode->i_blksize = fattr->i_blksize;
+        inode->i_blocks = fattr->i_blocks;
+        inode->i_rdev = fattr->devno;
+
+        if (S_ISREG(inode->i_mode))
+        {
+            inode->i_op = &Uvfs_file_inode_operations;
+            inode->i_fop = &Uvfs_file_file_operations;
+            inode->i_data.a_ops = &Uvfs_file_aops;
+        }
+        else if (S_ISDIR(inode->i_mode))
+        {
+            inode->i_op = &Uvfs_dir_inode_operations;
+            inode->i_fop = &Uvfs_dir_file_operations;
+        }
+        else if (S_ISLNK(inode->i_mode))
+        {
+            inode->i_op = &Uvfs_symlink_inode_operations;
+        }
+        else
+        {
+            /* we should never come through this code path */
+            printk("uvfs_iget: unexpected mode 0x%x for ino %ld rdev %d\n",
+                   (unsigned)inode->i_mode, inode->i_ino, inode->i_rdev);
+            init_special_inode(inode, inode->i_mode, fattr->devno);
+        }
+
+        unlock_new_inode(inode);
+    }
+    else
+    {
+        uvfs_refresh_inode(inode, fattr);
+    }
+    return inode;
+}
+
+int uvfs_refresh_inode(struct inode *inode, uvfs_attr_s *fattr)
+{
+    if (inode->i_size != fattr->i_size ||
+        inode->i_mtime.tv_sec != fattr->i_mtime.tv_sec ||
+        inode->i_mtime.tv_nsec != fattr->i_mtime.tv_nsec)
+    {
+        invalidate_inode_pages(inode->i_mapping);
+    }
+
+    inode->i_mode = fattr->i_mode;
+    inode->i_nlink = fattr->i_nlink;
+    inode->i_uid = fattr->i_uid;
+    inode->i_gid = fattr->i_gid;
+    inode->i_size = fattr->i_size;
+    inode->i_atime.tv_sec = fattr->i_atime.tv_sec;
+    inode->i_atime.tv_nsec = fattr->i_atime.tv_nsec;
+    inode->i_mtime.tv_sec = fattr->i_mtime.tv_sec;
+    inode->i_mtime.tv_nsec = fattr->i_mtime.tv_nsec;
+    inode->i_ctime.tv_sec = fattr->i_ctime.tv_sec;
+    inode->i_ctime.tv_nsec = fattr->i_ctime.tv_nsec;
+    inode->i_blksize = fattr->i_blksize;
+    inode->i_blocks = fattr->i_blocks;
+    inode->i_rdev = fattr->devno;
+
+    return 0;
+}
+
+int uvfs_revalidate_inode(struct inode *inode)
 {
     int error = 0;
+    uvfs_getattr_req_s* request;
+    uvfs_getattr_rep_s* reply;
+    uvfs_transaction_s* trans;
+
+    dprintk("<1>Entering uvfs_revalidate_inode\n");
+
+    trans = uvfs_new_transaction();
+    if (trans == NULL)
+    {
+        return -ENOMEM;
+    }
+    request = &trans->u.request.getattr;
+    request->type = UVFS_GETATTR;
+    request->serial = trans->serial;
+    request->size = sizeof(*request);
+    request->uid = current->fsuid;
+    request->gid = current->fsgid;
+    request->fh = UVFS_I(inode)->fh;
+    uvfs_make_request(trans);
+
+    reply = &trans->u.reply.getattr;
+    error = reply->error;
+
+    if (!error)
+    {
+        uvfs_refresh_inode(inode, &reply->a);
+    }
+
+    kfree(trans);
+    dprintk("<1>Exiting uvfs_revalidate_inode\n");
+    return error;
+}
+
+/*
+ * uvfs_encode_fh - encode filehandle data for NFS export
+ * @dentry:  the dentry to encode
+ * @fh:      where to store the file handle fragment
+ * @max_len: maximum length to store there
+ * @connectable: whether to store parent information; we ignore this field.
+ *
+ * This function fills the export_operations->encode_fh operation
+ * for the uvfs filesystem.  It can't use the default implementation
+ * because we depend on more than just the 32bit inode number.
+ *
+ * Returns the type code for the fh fragment (we are currently supporting
+ * a single type); returning 255 ultimately translates to NFSERR_OPNOTSUPP
+ */
+int uvfs_encode_fh(struct dentry *dentry, __u32 *fh, int *max_len, int connectable)
+{
+    struct inode *inode = dentry->d_inode;
+
+    dprintk("<1>uvfs_encode_fh: called against %s\n", dentry->d_name.name);
+    debugDisplayFhandle("uvfs_encode_fh: ", &UVFS_I(inode)->fh);
+
+    if (*max_len < 3)
+        return 255;
+
+    fh[0] = UVFS_I(inode)->fh.no_narid.na_aruid;
+    fh[1] = UVFS_I(inode)->fh.no_fspid.fs_sfuid;
+    fh[2] = UVFS_I(inode)->fh.no_fspid.fs_sbxid;
+
+    *max_len = 3;
+    return 1;
+}
+
+/*
+ * uvfs_decode_fh - decode filehandle data for NFS export
+ * @sb:  The superblock
+ * @fh:  pointer to the file handle fragment
+ * @fh_len: length of file handle fragment
+ * @fh_type:    value 1 => fh can be passed directly to get_dentry()
+ * @acceptable: function for testing acceptability of dentrys
+ * @content:    context for @acceptable
+ *
+ * Allocate a dentry for the given filehandle
+ *
+ * @NOTES: acceptable() will be nfsd_acceptable() for nfs exports.
+ */
+struct dentry *uvfs_decode_fh(struct super_block *sb,
+                              __u32 *fh,
+                              int fh_len,
+                              int fh_type,
+                              int (*acceptable)(void *, struct dentry*),
+                              void *context)
+{
+    uvfs_fhandle_s vfs_fh;
+
+    dprintk("<1>uvfs_decode_fh: fh_len = %d, fh_type = %d\n", fh_len, fh_type);
+    if (fh_type == 1)
+    {
+        vfs_fh.no_narid.na_aruid = fh[0];
+        vfs_fh.no_fspid.fs_sfuid = fh[1];
+        vfs_fh.no_fspid.fs_sbxid = fh[2];
+    }
+    else
+    {
+        dprintk("<1>uvfs_decode_fh() got unexpected fh_type %d\n", fh_type);
+        return 0;
+    }
+
+    return sb->s_export_op->find_exported_dentry(sb, &vfs_fh, 0, acceptable, context);
+}
+
+/*
+ * called with child->d_inode->i_sem down
+ * (see find_exported_dentry in exportfs/expfs.c)
+ */
+struct dentry* uvfs_get_parent(struct dentry *child)
+{
+    struct dentry *parent;
+    struct qstr dotdot = { name: "..", len: 2 };
+    uvfs_fhandle_s fh;
+    uvfs_attr_s attr;
+    struct inode *inode = 0;
+    int err;
+
+    debugDisplayFhandle("uvfs_get_parent: child fh is: ",
+                        &UVFS_I(child->d_inode)->fh);
+    err = uvfs_lookup_by_name(child->d_inode, &dotdot, &fh, &attr);
+    if (err)
+    {
+        return ERR_PTR(err);
+    }
+
+    inode = uvfs_iget(child->d_inode->i_sb, &fh, &attr);
+    if (!inode)
+        return ERR_PTR(-EACCES);
+
+    parent = d_alloc_anon(inode);
+    if (!parent)
+    {
+        iput(inode);
+        parent = ERR_PTR(-ENOMEM);
+    }
+
+    debugDisplayFhandle("uvfs_get_parent: parent fh is: ", &fh);
+    return parent;
+}
+
+/*
+ * the default version uses iget, making it unusable for us
+ */
+struct dentry* uvfs_get_dentry(struct super_block *sb, void *inump)
+{
+    uvfs_fhandle_s *fh = (uvfs_fhandle_s*) inump;
+    struct inode *inode = NULL;
+    unsigned long hash;
+    struct dentry *result = 0;
+    int error = 0;
+    uvfs_getattr_req_s* request;
+    uvfs_getattr_rep_s* reply;
+    uvfs_transaction_s* trans;
+
+    hash = (unsigned long) fh->no_fspid.fs_sfuid;
+    inode = ilookup5(sb, hash, &uvfs_compare_inode, fh);
+    if (inode == NULL)
+    {
+        dprintk("uvfs_get_dentry: ilookup5 failed, hash = %lu\n", hash);
+        debugDisplayFhandle("uvfs_get_dentry: fh is: ", fh);
+
+        trans = uvfs_new_transaction();
+        if (trans == NULL)
+        {
+            return ERR_PTR(-ENOMEM);
+        }
+        request = &trans->u.request.getattr;
+        request->type = UVFS_GETATTR;
+        request->serial = trans->serial;
+        request->size = sizeof(*request);
+        request->uid = current->fsuid;
+        request->gid = current->fsgid;
+        request->fh = *fh;
+        uvfs_make_request(trans);
+
+        reply = &trans->u.reply.getattr;
+        error = reply->error;
+
+        if (!error)
+        {
+            inode = uvfs_iget(sb, fh, &reply->a);
+            if (!inode)
+            {
+                dprintk("<1>uvfs_get_dentry: uvfs_iget returned a null inode!\n");
+                result = ERR_PTR(-EACCES);
+            }
+        } else
+        {
+            dprintk("<1>uvfs_get_dentry: revalidate got error %d\n", error);
+            if (error == -ECOMM)
+            {
+                displayFhandle("uvfs_get_dentry: ESTALE on fh: ", fh);
+                result = ERR_PTR(-ESTALE);
+            }
+            else
+            {
+                result = ERR_PTR(error);
+            }
+        }
+
+        kfree(trans);
+    }
+
+    if (inode)
+    {
+        result = d_alloc_anon(inode);
+        if (!result)
+        {
+            iput(inode);
+            result = ERR_PTR(-ENOMEM);
+        }
+    }
+
+    dprintk("<1>uvfs_get_dentry: returning 0x%p\n", result);
+    return result;
+}
+
+/*
+ * stat the file system
+ *
+ */
+int uvfs_statfs(struct super_block* sb, struct kstatfs* stat)
+{
+    int error = 0;
+
     uvfs_statfs_req_s* request;
     uvfs_statfs_rep_s* reply;
     uvfs_transaction_s* trans;
-    dprintk("<1>Entering statfs\n");
+    dprintk("<1>Entering uvfs_statfs\n");
+
     trans = uvfs_new_transaction();
     if (trans == NULL)
     {
@@ -81,12 +443,10 @@ int uvfs_statfs(struct super_block* sb, struct statfs* stat)
     request->type = UVFS_STATFS;
     request->serial = trans->serial;
     request->size = sizeof(*request);
-    request->fsid = (unsigned long)sb->u.generic_sbp;
-    if (!uvfs_make_request(trans))
-    {
-        error = -ERESTARTSYS;
-        goto out;
-    }
+    request->fh = UVFS_I(sb->s_root->d_inode)->fh;
+
+    uvfs_make_request(trans);
+
     reply = &trans->u.reply.statfs;
     stat->f_type = reply->f_type;
     stat->f_bsize = reply->f_bsize;
@@ -97,240 +457,131 @@ int uvfs_statfs(struct super_block* sb, struct statfs* stat)
     stat->f_ffree = reply->f_ffree;
     stat->f_namelen = reply->f_namelen;
     error = reply->error;
-out:
+
     kfree(trans);
-    dprintk("<1>Exited statfs\n");
+    dprintk("<1>Exited uvfs_statfs %d\n", error);
     return error;
 }
 
 
-/* Unmount. */
-
-void uvfs_put_super(struct super_block* sb)
+/* format:  option1=data1,option2=data2
+ * imagine future options might include timeout for iwserver,
+ * cache expiration
+ */
+static int uvfs_parse_options(struct super_block* sb, char* options, char **iwstore)
 {
-    uvfs_put_super_req_s* request;
-    uvfs_transaction_s* trans;
-    dprintk("<1>Entering put_super\n");
-    // check if we are currently mounted */
-    if(!uvfs_mounted)
+    if (!strncmp(options, "store=", 6))
     {
-        // nope so return immediately
-        dprintk("<1>Exited put_super not currently mounted\n");
-        return;
+        *iwstore = options + 6;
+        return 0;
     }
-    // check if server is running
-    if(GET_USE_COUNT(THIS_MODULE) == 0)
-    {
-        // nope so return immediately
-        dprintk("<1>Exited put_super server not running\n");
-        return;
-    }
-    // yes tell server to unmount
-    dprintk("<1>put_super new_transaction\n");
-    trans = uvfs_new_transaction();
-    if (trans == NULL)
-    {
-        return;
-    }
-    request = &trans->u.request.put_super;
-    request->type = UVFS_PUT_SUPER;
-    request->serial = trans->serial;
-    request->size = sizeof(*request);
-    request->fsid = (unsigned long)sb->u.generic_sbp;
-    dprintk("<1>do uvfs_make_request\n");
-    uvfs_make_request(trans);
-    kfree(trans);
-    MOD_DEC_USE_COUNT;
-    uvfs_mounted = 0;  // server unmounted
-    dprintk("<1>Exited put_super server running\n");
+    return 1;
 }
 
-
 /* Called at mount time. */
-
-struct super_block* uvfs_read_super(struct super_block* sb,
-                                    void* data,
-                                    int silent)
+int uvfs_read_super(struct super_block* sb,
+                                void* data,
+                                int silent)
 {
-    int root_ino;
-    struct super_block* retval = NULL;
+    int retval = 0;
     struct inode* root;
     uvfs_read_super_req_s* request;
     uvfs_read_super_rep_s* reply;
     uvfs_transaction_s* trans;
     char* arg;
     size_t arglength;
-    
-    dprintk("<1>Entering read_super\n");
-    arg = data;
-    arglength = strlen(arg);
+
+    dprintk("<1>Entering uvfs_read_super:"
+           "sb = 0x%p, data = 0x%p, silent = %d\n",
+           sb, data, silent);
+    if (data == 0 || uvfs_parse_options(sb, data, &arg))
+    {
+        printk("<1>uvfs_read_super: invalid options!\n");
+        return -EINVAL;
+    }
+
+    arglength = strlen(arg) + 1;
     if (arglength >= UVFS_MAX_PATHLEN)
     {
-        dprintk("<1>Exited read_super > UVFS_MAX_PATHLEN\n");
-        return ERR_PTR(-ENAMETOOLONG);
+        dprintk("<1>Exited uvfs_read_super > UVFS_MAX_PATHLEN\n");
+        return -ENAMETOOLONG;
     }
-    dprintk("<1>read_super check if already mounted\n");
-    // check if we are currently mounted */
-    if(uvfs_mounted)
-    {
-        // nope so return immediately
-        dprintk("<1>Exited read_super we are already mounted\n");
-        return ERR_PTR(-EBUSY);
-    }
-    dprintk("<1>read_super check server running\n");
+    dprintk("<1>uvfs_read_super check server running\n");
     // check if server is running
-    if(GET_USE_COUNT(THIS_MODULE) == 0)
+    if(uvfs_use_count == 0)
     {
         // nope so return immediately
-        dprintk("<1>Exited read_super server not running\n");
-        return ERR_PTR(-EIO);
+        dprintk("<1>Exited uvfs_read_super server not running\n");
+        return -EIO;
     }
     // yes tell server to mount
-    dprintk("<1>read_super uvfs_new_transaction\n");
+    dprintk("<1>uvfs_read_super uvfs_new_transaction\n");
     trans = uvfs_new_transaction();
     if (trans == NULL)
     {
-        dprintk("<1>Exited read_super\n");
-        return ERR_PTR(-ENOMEM);
+        dprintk("<1>Exited uvfs_read_super\n");
+        return -ENOMEM;
     }
-    dprintk("<1>read_super build request\n");
+    dprintk("<1>uvfs_read_super build request\n");
     request = &trans->u.request.read_super;
     request->type = UVFS_READ_SUPER;
     request->serial = trans->serial;
-    request->size = offsetof(uvfs_read_super_req_s, buff) + arglength; 
+    request->size = offsetof(uvfs_read_super_req_s, buff) + arglength;
     request->uid = current->fsuid;
     request->gid = current->fsgid;
     request->arglength = arglength;
     memcpy(request->buff, arg, arglength);
-    dprintk("<1>read_super uvfs_make_request\n");
-    if (!uvfs_make_request(trans))
-    {
-        retval = ERR_PTR(-ERESTARTSYS);
-        goto out;
-    }
+    dprintk("<1>uvfs_read_super uvfs_make_request\n");
+    uvfs_make_request(trans);
+
     reply = &trans->u.reply.read_super;
     if (reply->error < 0)
     {
-        retval = ERR_PTR(reply->error);
+        retval = reply->error;
         goto out;
     }
-    dprintk("<1>read_super get reply\n");
-    Sb = sb; /* save super block ptr */
+    dprintk("<1>uvfs_read_super get reply\n");
     sb->s_maxbytes = 0xFFFFFFFF;
     sb->s_blocksize = reply->s_blocksize;
     sb->s_blocksize_bits = reply->s_blocksize_bits;
     sb->s_magic = reply->s_magic;
     sb->s_op = &Uvfs_super_operations;
-    sb->u.generic_sbp = (void*)reply->fsid;
-    root_ino = reply->root_ino;
-    root = iget(sb, root_ino);
-    if (root != NULL)
+    sb->s_export_op = &Uvfs_export_operations;
+
+    root = uvfs_iget(sb, &reply->fh, &reply->a);
+    if (root == NULL)
     {
-        dprintk("<1>read_super iget returned good root\n");
-        uvfs_set_inode(root, &reply->a, (struct dentry *)NULL, UVFS_READ_SUPER);
-        sb->s_root = d_alloc_root(root);
-        if(sb->s_root->d_inode->u.generic_ip == NULL)
-           sb->s_root->d_inode->u.generic_ip =
-               (void*)kmalloc(sizeof(uvfs_inode_local_s), GFP_KERNEL);
-        memcpy(sb->s_root->d_inode->u.generic_ip,
-                    &reply->fh,sizeof(vfs_fhandle_s));
-        dprintk("<1>root 0x%x %ld\n", (unsigned)root, root->i_ino);
-        dprintk("read_super: 0x%x i_ino 0x%x\n", (unsigned)root, (unsigned)root->i_ino);
-        dprintk("read_super: 0x%x generic_ip 0x%x\n", (unsigned)root, (unsigned)root->u.generic_ip);
-        // displayFhandle("read_super: reply",&reply->fh.handle);
-        // displayInodeInfo("read_super: info",
-        //       (uvfs_inode_info_s*) sb->s_root->d_inode->u.generic_ip);
-        MOD_INC_USE_COUNT;
-        retval = sb;
+        retval= -ENOMEM;
+        goto out;
     }
-    else
-    {
-        dprintk("<1>iget returned null in read_super.\n");
-        retval = ERR_PTR(-ENOMEM);
-    }
+
+    sb->s_root = d_alloc_root(root);
+
+    retval = 0;
+
 out:
     kfree(trans);
-    uvfs_mounted = 1;  // server mounted
-    dprintk("<1>Exited read_super\n");
+    dprintk("<1>Exited uvfs_read_super %d\n", retval);
     return retval;
 }
 
 
-void uvfs_delete_inode(struct inode* inode)
+/*
+ * super block wrapper function used by Linux 2.6.x kernels
+ *
+ */
+struct super_block *uvfs_get_sb(struct file_system_type *fs_type,
+        int flags, const char *dev_name, void *data)
 {
-#ifdef REUSE_INUM
-    uvfs_delete_inode_req_s* request;
-    uvfs_transaction_s* trans;
-#endif
-    int ino;
-    unsigned long fsid;
-    struct super_block* sb;
+    struct super_block *sb;
 
-    lock_kernel();
-    sb = inode->i_sb;
-    lock_super(sb);
-    dprintk("delete_inode: i_ino 0x%x 0x%x\n", (unsigned)inode, (unsigned)inode->i_ino);
-    dprintk("delete_inode: generic_ip 0x%x 0x%x\n", (unsigned)inode, (unsigned)inode->u.generic_ip);
-    ino = inode->i_ino;
-    dprintk("<1>Entered uvfs_delete_inode %d (%d)\n", 
-            ino, current->pid);
-    fsid = (unsigned long)inode->i_sb->u.generic_sbp;
-    clear_inode(inode);
-    unlock_super(sb);
-
-#ifdef REUSE_INUM
-    trans = uvfs_new_transaction();
-    if (trans == NULL)
+    dprintk("<1>Entering uvfs_get_sb: flags = 0x%x\n", flags);
+    sb = get_sb_nodev(fs_type, flags, data, uvfs_read_super);
+    if (!IS_ERR(sb))
     {
-        return;
+        sb->s_flags = flags;
+        sb->s_flags |= MS_ACTIVE;
     }
-    request = &trans->u.request.delete_inode;
-    request->type = UVFS_DELETE_INODE;
-    request->serial = trans->serial;
-    request->size = sizeof(*request);
-    request->fsid = fsid;
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
-    request->ino = ino;
-    memcpy(&request->fh,inode->u.generic_ip,sizeof(vfs_fhandle_s));
-    uvfs_make_request(trans);
-    kfree(trans);
-#endif
-
-    if(inode->u.generic_ip)
-    {
-        kfree(inode->u.generic_ip);
-        inode->u.generic_ip = 0;
-    }
-    inode->i_size = 0;
-    unlock_kernel();
-    dprintk("<1>uvfs_delete_inode finished.\n");
+    dprintk("<1>Exited uvfs_get_sb\n");
+    return(sb);
 }
-
-
-void uvfs_reuse_inum(int ino)
-{
-#ifdef REUSE_INUM
-    uvfs_delete_inode_req_s* request;
-    uvfs_transaction_s* trans;
-
-    dprintk("<1>Entered uvfs_reuse_inum %d (%d)\n", ino, current->pid);
-    trans = uvfs_new_transaction();
-    if (trans == NULL)
-    {
-        return;
-    }
-    request = &trans->u.request.delete_inode;
-    request->type = UVFS_DELETE_INODE;
-    request->serial = trans->serial;
-    request->size = sizeof(*request);
-    request->fsid = 0;
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
-    request->ino = ino;
-    uvfs_make_request(trans);
-    kfree(trans);
-    dprintk("<1>uvfs_reuse_inum finished.\n");
-#endif
-}
-
