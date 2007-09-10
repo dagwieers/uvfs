@@ -2,7 +2,7 @@
  *   operations.c -- operations structs
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2006 Interwoven, Inc.
+ *   Copyright (C) 2004-2007 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -42,6 +42,7 @@ struct address_space_operations Uvfs_file_aops =
 
 struct inode_operations Uvfs_file_inode_operations =
 {
+    .permission     = uvfs_permission,
     .setattr        = uvfs_setattr,
     .getattr        = uvfs_getattr,
 };
@@ -55,6 +56,7 @@ struct inode_operations Uvfs_dir_inode_operations =
     .mkdir          = uvfs_mkdir,
     .rmdir          = uvfs_rmdir,
     .rename         = uvfs_rename,
+    .permission     = uvfs_permission,
     .setattr        = uvfs_setattr,
     .getattr        = uvfs_getattr,
 };

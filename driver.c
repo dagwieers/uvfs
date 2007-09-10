@@ -2,7 +2,7 @@
  *   driver.c -- conduit from kernel to user space
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2006 Interwoven, Inc.
+ *   Copyright (C) 2004-2007 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -450,8 +450,8 @@ static void __exit uvfs_cleanup(void)
     uvfs_destroy_inodecache();
 }
 
-
-MODULE_LICENSE("GPL");
+MODULE_LICENSE(UVFS_LICENSE);
+MODULE_VERSION(UVFS_VERSION);
 
 module_init(uvfs_init);
 module_exit(uvfs_cleanup);

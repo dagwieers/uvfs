@@ -2,7 +2,7 @@
  *   uvfs.h
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2006 Interwoven, Inc.
+ *   Copyright (C) 2004-2007 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -27,6 +27,8 @@
 #include "protocol.h"
 
 #define UVFS_FS_NAME "pmfs"
+#define UVFS_LICENSE "GPL"
+#define UVFS_VERSION "2.0.1"
 
 struct uvfs_inode_info
 {
@@ -72,6 +74,7 @@ extern int uvfs_rename(struct inode *, struct dentry *, struct inode *, struct d
 extern int uvfs_readdir(struct file *, void *, filldir_t);
 extern int uvfs_open(struct inode *, struct file *);
 extern int uvfs_dentry_revalidate(struct dentry *, struct nameidata *);
+extern int uvfs_permission(struct inode *, int, struct nameidata *);
 
 /* uvfs/driver.c */
 extern void safe_sleep_on(wait_queue_head_t *, spinlock_t *);
@@ -113,6 +116,7 @@ extern void uvfs_destroy_inode(struct inode *);
 extern struct inode *uvfs_iget(struct super_block *, uvfs_fhandle_s *, uvfs_attr_s *);
 extern int uvfs_refresh_inode(struct inode *, uvfs_attr_s *);
 extern int uvfs_revalidate_inode(struct inode *);
+extern int uvfs_compare_inode(struct inode* inode, void* data);
 
 struct dentry *uvfs_decode_fh(struct super_block *, __u32 *, int, int, int (*)(void *, struct dentry*), void *);
 int uvfs_encode_fh(struct dentry *dentry, __u32 *fh, int *max_len, int connectable);

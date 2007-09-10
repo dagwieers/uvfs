@@ -2,7 +2,7 @@
  *   super.c -- superblock and inode functions
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2006 Interwoven, Inc.
+ *   Copyright (C) 2004-2007 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -90,7 +90,7 @@ void uvfs_destroy_inode(struct inode *inode)
 }
 
 /* functions passed to iget5_locked */
-static int uvfs_compare_inode(struct inode* inode, void* data)
+int uvfs_compare_inode(struct inode* inode, void* data)
 {
     uvfs_fhandle_s * other = (uvfs_fhandle_s*) data;
     uvfs_fhandle_s * extra = &UVFS_I(inode)->fh;
@@ -293,6 +293,8 @@ struct dentry *uvfs_decode_fh(struct super_block *sb,
     uvfs_fhandle_s vfs_fh;
 
     dprintk("<1>uvfs_decode_fh: fh_len = %d, fh_type = %d\n", fh_len, fh_type);
+
+    memset(&vfs_fh, 0, sizeof(vfs_fh));
     if (fh_type == 1)
     {
         vfs_fh.no_narid.na_aruid = fh[0];

@@ -2,7 +2,7 @@
  *   dir.c -- directory operations
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2006 Interwoven, Inc.
+ *   Copyright (C) 2004-2007 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -564,15 +564,129 @@ full:
  *
  * NOTE! The hit can be a negative hit too, don't assume
  * we have an inode!
- *
- * RETURNS:
- *    zero : needs revalidation
- * nonzero : dosn't need revalidation
- *
  */
 int uvfs_dentry_revalidate(struct dentry * dentry, struct nameidata * nd)
 {
-    int rv = 0;
-    dprintk("<1>uvfs_dentry_revalidate: returning %d for %s\n", rv, dentry->d_name.name);
-    return rv;
+    int error = 0;
+    uvfs_attr_s attr;
+    uvfs_fhandle_s fh;
+    struct inode *inode;
+    struct dentry *parent;
+
+    parent = dget_parent(dentry);
+    inode = dentry->d_inode;
+
+    /* always invalidate negative dentries */
+    if (!inode)
+    {
+        dprintk("uvfs_dentry_revalidate: %s/%s negative dentry\n",
+                parent->d_name.name, dentry->d_name.name);
+        goto out_bad;
+    }
+
+    error = uvfs_lookup_by_name(parent->d_inode, &dentry->d_name, &fh, &attr);
+    if (error)
+    {
+        dprintk("uvfs_dentry_revalidate: %s/%s lookup error=%d\n",
+                parent->d_name.name, dentry->d_name.name, error);
+        goto out_bad;
+    }
+
+    if (!uvfs_compare_inode(inode, &fh))
+    {
+        dprintk("uvfs_dentry_revalidate: %s/%s fh mismatch\n",
+                parent->d_name.name, dentry->d_name.name);
+        goto out_bad;
+    }
+
+    dprintk("uvfs_dentry_revalidate: %s/%s still valid\n",
+            parent->d_name.name, dentry->d_name.name);
+
+    dput(parent);
+    return 1;
+
+out_bad:
+
+    dput(parent);
+    return 0;
+}
+
+int uvfs_permission(struct inode *inode, int mask, struct nameidata *nd)
+{
+    int error = 0;
+    uvfs_getattr_req_s* request;
+    uvfs_getattr_rep_s* reply;
+    uvfs_transaction_s* trans;
+    umode_t mode = inode->i_mode;
+
+    if (mask & MAY_WRITE) {
+        /*
+         * Nobody gets write access to a read-only fs.
+         */
+        if (IS_RDONLY(inode) &&
+            (S_ISREG(mode) || S_ISDIR(mode) || S_ISLNK(mode)))
+            return -EROFS;
+
+        /*
+         * Nobody gets write access to an immutable file.
+         */
+        if (IS_IMMUTABLE(inode))
+            return -EACCES;
+    }
+
+    trans = uvfs_new_transaction();
+    if (trans == NULL)
+    {
+        return -ENOMEM;
+    }
+    request = &trans->u.request.getattr;
+    request->type = UVFS_GETATTR;
+    request->serial = trans->serial;
+    request->size = sizeof(*request);
+    request->uid = current->fsuid;
+    request->gid = current->fsgid;
+    request->fh = UVFS_I(inode)->fh;
+    uvfs_make_request(trans);
+
+    reply = &trans->u.reply.getattr;
+    error = reply->error;
+    if (error)
+    {
+        goto out;
+    }
+
+    mode = reply->a.i_mode;
+
+    if (current->fsuid == inode->i_uid)
+        mode >>= 6;
+    else if (in_group_p(inode->i_gid))
+        mode >>= 3;
+
+    /*
+     * If the DACs are ok we don't need any capability check.
+     */
+    if (((mode & mask & (MAY_READ|MAY_WRITE|MAY_EXEC)) == mask))
+        goto out;
+
+    /*
+     * Read/write DACs are always overridable.
+     * Executable DACs are overridable if at least one exec bit is set.
+     */
+    if (!(mask & MAY_EXEC) ||
+        (reply->a.i_mode & S_IXUGO) || S_ISDIR(reply->a.i_mode))
+        if (capable(CAP_DAC_OVERRIDE))
+            goto out;
+
+    /*
+     * Searching includes executable on directories, else just read.
+     */
+    if (mask == MAY_READ || (S_ISDIR(reply->a.i_mode) && !(mask & MAY_WRITE)))
+        if (capable(CAP_DAC_READ_SEARCH))
+            goto out;
+
+    error = -EACCES;
+
+out:
+    kfree(trans);
+    return error;
 }

@@ -2,7 +2,7 @@
  *   file.c -- file operations
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2006 Interwoven, Inc.
+ *   Copyright (C) 2004-2007 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -337,9 +337,14 @@ int uvfs_getattr(struct vfsmount *mnt, struct dentry* entry, struct kstat* stat)
     int error;
 
     error = uvfs_revalidate_inode(inode);
-    if (!error)
-    {
-        generic_fillattr(inode, stat);
-    }
+
+    /*
+     * nfsd ignores vfs_getattr errors for nfs v2/v3, so always return
+     * attributes, even if inode revalidation failed.  It is better to
+     * return slightly stale attributes than to let nfsd pass uninitialized
+     * data back to the nfs client.
+     */
+    generic_fillattr(inode, stat);
+
     return error;
 }
