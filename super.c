@@ -2,7 +2,7 @@
  *   super.c -- superblock and inode functions
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2007 Interwoven, Inc.
+ *   Copyright (C) 2004-2008 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -139,7 +139,11 @@ uvfs_iget(struct super_block *sb, uvfs_fhandle_s *fh, uvfs_attr_s *fattr)
         inode->i_mtime.tv_nsec = fattr->i_mtime.tv_nsec;
         inode->i_ctime.tv_sec = fattr->i_ctime.tv_sec;
         inode->i_ctime.tv_nsec = fattr->i_ctime.tv_nsec;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+        inode->i_blkbits = fattr->i_blksize;
+#else
         inode->i_blksize = fattr->i_blksize;
+#endif
         inode->i_blocks = fattr->i_blocks;
         inode->i_rdev = fattr->devno;
 
@@ -195,7 +199,11 @@ int uvfs_refresh_inode(struct inode *inode, uvfs_attr_s *fattr)
     inode->i_mtime.tv_nsec = fattr->i_mtime.tv_nsec;
     inode->i_ctime.tv_sec = fattr->i_ctime.tv_sec;
     inode->i_ctime.tv_nsec = fattr->i_ctime.tv_nsec;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+    inode->i_blkbits = fattr->i_blksize;
+#else
     inode->i_blksize = fattr->i_blksize;
+#endif
     inode->i_blocks = fattr->i_blocks;
     inode->i_rdev = fattr->devno;
 
@@ -427,13 +435,19 @@ struct dentry* uvfs_get_dentry(struct super_block *sb, void *inump)
  * stat the file system
  *
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+int uvfs_statfs(struct dentry* dentry, struct kstatfs* stat)
+#else
 int uvfs_statfs(struct super_block* sb, struct kstatfs* stat)
+#endif
 {
     int error = 0;
-
     uvfs_statfs_req_s* request;
     uvfs_statfs_rep_s* reply;
     uvfs_transaction_s* trans;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+    struct inode *inode = dentry->d_inode;
+#endif
     dprintk("<1>Entering uvfs_statfs\n");
 
     trans = uvfs_new_transaction();
@@ -445,7 +459,11 @@ int uvfs_statfs(struct super_block* sb, struct kstatfs* stat)
     request->type = UVFS_STATFS;
     request->serial = trans->serial;
     request->size = sizeof(*request);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+    request->fh = UVFS_I(inode)->fh;
+#else
     request->fh = UVFS_I(sb->s_root->d_inode)->fh;
+#endif
 
     uvfs_make_request(trans);
 
@@ -567,23 +585,19 @@ out:
     return retval;
 }
 
-
 /*
  * super block wrapper function used by Linux 2.6.x kernels
- *
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+int uvfs_get_sb(struct file_system_type *fs_type,
+        int flags, const char *dev_name, void *data, struct vfsmount *mnt)
+{
+    return get_sb_nodev(fs_type, flags, data, uvfs_read_super, mnt);
+}
+#else
 struct super_block *uvfs_get_sb(struct file_system_type *fs_type,
         int flags, const char *dev_name, void *data)
 {
-    struct super_block *sb;
-
-    dprintk("<1>Entering uvfs_get_sb: flags = 0x%x\n", flags);
-    sb = get_sb_nodev(fs_type, flags, data, uvfs_read_super);
-    if (!IS_ERR(sb))
-    {
-        sb->s_flags = flags;
-        sb->s_flags |= MS_ACTIVE;
-    }
-    dprintk("<1>Exited uvfs_get_sb\n");
-    return(sb);
+    return get_sb_nodev(fs_type, flags, data, uvfs_read_super);
 }
+#endif

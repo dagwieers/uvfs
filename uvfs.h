@@ -2,7 +2,7 @@
  *   uvfs.h
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2007 Interwoven, Inc.
+ *   Copyright (C) 2004-2008 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -24,11 +24,12 @@
 
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/version.h>
 #include "protocol.h"
 
 #define UVFS_FS_NAME "pmfs"
 #define UVFS_LICENSE "GPL"
-#define UVFS_VERSION "2.0.1"
+#define UVFS_VERSION "2.0.2"
 
 struct uvfs_inode_info
 {
@@ -106,9 +107,14 @@ extern struct export_operations Uvfs_export_operations;
 
 /* uvfs/super.c */
 extern void displayFhandle(const char *, uvfs_fhandle_s *);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+extern int uvfs_statfs(struct dentry *, struct kstatfs *);
+extern int uvfs_get_sb(struct file_system_type *, int, const char *, void *, struct vfsmount *);
+#else
 extern int uvfs_statfs(struct super_block *, struct kstatfs *);
-extern int uvfs_read_super(struct super_block *, void *, int);
 extern struct super_block *uvfs_get_sb(struct file_system_type *, int, const char *, void *);
+#endif
+extern int uvfs_read_super(struct super_block *, void *, int);
 extern int uvfs_init_inodecache(void);
 extern void uvfs_destroy_inodecache(void);
 extern struct inode *uvfs_alloc_inode(struct super_block *);
@@ -125,6 +131,10 @@ struct dentry* uvfs_get_parent(struct dentry *child);
 
 /* uvfs/symlink.c */
 extern int uvfs_readlink(struct dentry *, char *, int);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+extern void * uvfs_follow_link(struct dentry *, struct nameidata *);
+#else
 extern int uvfs_follow_link(struct dentry *, struct nameidata *);
+#endif
 
 #endif /* _UVFS_UVFS_H_ */

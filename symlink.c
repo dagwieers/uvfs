@@ -2,7 +2,7 @@
  *   symlink.c -- symlink operations
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2006 Interwoven, Inc.
+ *   Copyright (C) 2004-2008 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -21,33 +21,17 @@
 
 #include "uvfs.h"
 
-/*
- * read the symbolic link in the referenced dentry
- * and copy to the out buffer, for max length.
- * we will then do a vfs_readlink on that name
- * to find the real file or directory.
- *
- */
-int uvfs_readlink(struct dentry* entry,
-                  char* out,
-                  int length)
+int uvfs_readlink(struct dentry *dentry, char *buffer, int buflen)
 {
-    char *buff;
     int error = 0;
     uvfs_readlink_req_s* request;
     uvfs_readlink_rep_s* reply;
     uvfs_transaction_s* trans;
-    struct inode* inode = entry->d_inode;
-    dprintk("<1>Entering uvfs_readlink\n");
-    if ((buff = kmalloc(UVFS_MAX_PATHLEN + 1, GFP_KERNEL)) == NULL)
-    {
-        dprintk("<1>uvfs_readlink Couldn't allocate symlink buffer.\n");
-        return -ENOMEM;
-    }
+    struct inode* inode = dentry->d_inode;
+    dprintk("<1>Entering uvfs_readlink name=%s\n", dentry->d_name.name);
     trans = uvfs_new_transaction();
     if (trans == NULL)
     {
-        kfree(buff);
         return -ENOMEM;
     }
     request = &trans->u.request.readlink;
@@ -63,52 +47,36 @@ int uvfs_readlink(struct dentry* entry,
     if (reply->error < 0)
     {
         error = reply->error;
-        dprintk("<1>uvfs_readlink error=%d\n", error);
-        dprintk("link %s %x\n",
-            entry->d_name.name, (int)entry->d_inode);
-        goto err;
+        goto out;
     }
-    memcpy(buff, reply->buff, reply->len);
-    buff[reply->len] = 0;
-    error = vfs_readlink(entry, out, length, buff);
-    entry->d_inode->i_size = reply->len;
-    kfree(buff);
-    kfree(trans);
-    return error;
-err:
-    kfree(buff);
+    reply->buff[reply->len] = 0;
+    error = vfs_readlink(dentry, buffer, buflen, reply->buff);
+out:
     kfree(trans);
     dprintk("<1>Exited uvfs_readlink error=%d\n", error);
     return error;
 }
 
-/*
- * read the symbolic link in the referenced dentry
- * and copy to a temp buffer.
- * we will then do a vfs_follow_link on that name
- * to find the real file or directory.
- *
- */
-int uvfs_follow_link(struct dentry* entry,
-                     struct nameidata* nd)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+void *uvfs_follow_link(struct dentry *dentry, struct nameidata *nd)
+#else
+int uvfs_follow_link(struct dentry *dentry, struct nameidata *nd)
+#endif
 {
     int error = 0;
-    char *buff;
     uvfs_readlink_req_s* request;
     uvfs_readlink_rep_s* reply;
     uvfs_transaction_s* trans;
-    struct inode* inode = entry->d_inode;
-    dprintk("<1>Entered uvfs_follow_link\n");
-    if ((buff = kmalloc(UVFS_MAX_PATHLEN + 1, GFP_KERNEL)) == NULL)
-    {
-        dprintk("<1>uvfs_follow_link Couldn't allocate symlink buffer.\n");
-        return -ENOMEM;
-    }
+    struct inode* inode = dentry->d_inode;
+    dprintk("<1>Entering uvfs_follow_link name=%s\n", dentry->d_name.name);
     trans = uvfs_new_transaction();
     if (trans == NULL)
     {
-        kfree(buff);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+        return ERR_PTR(-ENOMEM);
+#else
         return -ENOMEM;
+#endif
     }
     request = &trans->u.request.readlink;
     request->type = UVFS_READLINK;
@@ -123,22 +91,16 @@ int uvfs_follow_link(struct dentry* entry,
     if (reply->error < 0)
     {
         error = reply->error;
-        dprintk("<1>uvfs_follow_link error=%d\n", error);
-        dprintk("link %s %x\n",
-            entry->d_name.name, (int)entry->d_inode);
-        goto err;
+        goto out;
     }
-    memcpy(buff, reply->buff, reply->len);
-    buff[reply->len] = 0;
-    dprintk("<1>Exited uvfs_follow_link error=%d\n", error);
-    error = vfs_follow_link(nd, buff);
-    entry->d_inode->i_size = reply->len;
-    kfree(buff);
+    reply->buff[reply->len] = 0;
+    error = vfs_follow_link(nd, reply->buff);
+out:
     kfree(trans);
-    return error;
-err:
     dprintk("<1>Exited uvfs_follow_link error=%d\n", error);
-    kfree(buff);
-    kfree(trans);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+    return ERR_PTR(error);
+#else
     return error;
+#endif
 }
