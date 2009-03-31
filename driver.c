@@ -2,7 +2,7 @@
  *   driver.c -- conduit from kernel to user space
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2007 Interwoven, Inc.
+ *   Copyright (C) 2004-2009 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -22,6 +22,9 @@
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include "uvfs.h"
+
+/* Allow these signals to interrupt a request in progress */
+#define ALLOWED_SIGS   (sigmask(SIGKILL))
 
 static int uvfsd_open(struct inode *, struct file *);
 static int uvfsd_release(struct inode *, struct file *);
@@ -51,7 +54,7 @@ static spinlock_t Uvfs_lock;
 static int ShuttingDown = 0;
 static int Serial_number = 0;
 
-extern int uvfs_use_count;      // module use count
+static int uvfs_use_count = 0;
 
 LIST_HEAD(Uvfs_requests);
 LIST_HEAD(Uvfs_replies);
@@ -85,9 +88,9 @@ static char* Op_names[] =
  */
 static int uvfsd_open(struct inode* inode, struct file* file)
 {
-    dprintk("Entering uvfsd_open\n");
+    spin_lock(&Uvfs_lock);
     uvfs_use_count++;
-    dprintk("Exiting uvfsd_open\n");
+    spin_unlock(&Uvfs_lock);
     return 0;
 }
 
@@ -98,19 +101,31 @@ static int uvfsd_open(struct inode* inode, struct file* file)
  */
 static int uvfsd_release(struct inode* inode, struct file* filp)
 {
-    dprintk("Entering uvfsd_release\n");
+    spin_lock(&Uvfs_lock);
     uvfs_use_count--;
-
-    if(uvfs_use_count)
+    if (uvfs_use_count == 0)
     {
-         dprintk("Exiting uvfsd_release count %d\n",uvfs_use_count);
-         return 0;
+        uvfs_transaction_s* trans;
+        while (!list_empty(&Uvfs_requests))
+        {
+            trans = list_entry(Uvfs_requests.next, uvfs_transaction_s, list);
+            list_del_init(&trans->list);
+            trans->u.reply.generic.error = -EIO;
+            trans->answered = 1;
+            wake_up(&trans->fs_queue);
+        }
+        while (!list_empty(&Uvfs_replies))
+        {
+            trans = list_entry(Uvfs_replies.next, uvfs_transaction_s, list);
+            list_del_init(&trans->list);
+            trans->u.reply.generic.error = -EIO;
+            trans->answered = 1;
+            wake_up(&trans->fs_queue);
+        }
+        ShuttingDown = 0;
+        Serial_number = 0;
     }
-
-    /* on last release reset shutdown and request serial number */
-    ShuttingDown = 0;
-    Serial_number = 0;
-    dprintk("Exiting uvfsd_release ShutDown clear\n");
+    spin_unlock(&Uvfs_lock);
     return 0;
 }
 
@@ -182,9 +197,15 @@ static ssize_t uvfsd_read(struct file* filp,
        there isn't a possibility of a request going unanswered.
     */
     wake_up_interruptible(&Uvfs_driver_queue);
+    trans->in_use = 1;
     spin_unlock(&Uvfs_lock);
     request = &trans->u.request.generic;
     ret = copy_to_user(buff, request, request->size);
+    spin_lock(&Uvfs_lock);
+    trans->in_use = 0;
+    if (trans->abort)
+        wake_up(&trans->fs_queue);
+    spin_unlock(&Uvfs_lock);
     dprintk("<1>Exited uvfsd_read: %d (%d)\n",
             request->size,
             current->pid);
@@ -246,10 +267,14 @@ static ssize_t uvfsd_write(struct file* file,
     }
     /* We have a transaction */
     list_del_init(&trans->list);
+    trans->in_use = 1;
     spin_unlock(&Uvfs_lock);
     ret = copy_from_user(&trans->u.reply, buff, reply.size);
-    wake_up_interruptible(&trans->fs_queue);
+    spin_lock(&Uvfs_lock);
+    trans->in_use = 0;
     trans->answered = 1;
+    wake_up(&trans->fs_queue);
+    spin_unlock(&Uvfs_lock);
     dprintk("<1>Exited uvfsd_write (%d)\n", current->pid);
     if(ret)
         return -EIO;
@@ -267,16 +292,12 @@ static int uvfsd_ioctl(struct inode* inode, struct file* filp,
     {
         case UVFS_IOCTL_SHUTDOWN:
         {
-            if (uvfs_use_count)
-            {
-                dprintk("Entering uvfsd_ioctl SHUTDOWN\n");
-                spin_lock(&Uvfs_lock);
-                ShuttingDown = 1;
-                wake_up_interruptible(&Uvfs_driver_queue);
-                spin_unlock(&Uvfs_lock);
-                return 0;
-            }
-            return -EPERM;
+            dprintk("Entering uvfsd_ioctl SHUTDOWN\n");
+            spin_lock(&Uvfs_lock);
+            ShuttingDown = 1;
+            wake_up_interruptible(&Uvfs_driver_queue);
+            spin_unlock(&Uvfs_lock);
+            return 0;
         }
         case UVFS_IOCTL_STATUS:
         {
@@ -319,59 +340,56 @@ static int uvfsd_ioctl(struct inode* inode, struct file* filp,
 }
 
 
-/* Safely go to sleep on a queue.  This makes the queue behave like
-   a condition variable.  The spinlock must be locked on entry, and
-   will be locked on exit. */
-
-void safe_sleep_on(wait_queue_head_t* q, spinlock_t* s)
-{
-    wait_queue_t wait;
-
-    dprintk("Entering safe_sleep_on\n");
-    init_waitqueue_entry(&wait, current);
-
-    dprintk("safe_sleep_on add_wait_exclusive\n");
-    add_wait_queue_exclusive(q, &wait);
-    set_current_state(TASK_INTERRUPTIBLE);
-    spin_unlock(s);
-    schedule();
-    spin_lock(s);
-    set_current_state(TASK_RUNNING);
-    dprintk("safe_sleep_on remove_wait_queue\n");
-    remove_wait_queue(q, &wait);
-    if (signal_pending(current))
-    {
-        dprintk("<1>safe_sleep_on: ERESTARTSYS\n");
-    }
-    /* Others seem to do a set_current_state(TASK_RUNNING) here. However,
-       it looks like wake_up should have already done this. Otherwise this
-       thread would not have been scheduled. */
-    dprintk("Exiting safe_sleep_on\n");
-}
-
-/* Returns true if we weren't interrupted. */
-
 int uvfs_make_request(uvfs_transaction_s* trans)
 {
-    dprintk("Entering uvfs_make_request\n");
+    sigset_t oldset;
+    unsigned long irqflags;
+
+    /* Make sure the server is running, and add our request to the queue */
     spin_lock(&Uvfs_lock);
-    list_add_tail(&trans->list, &Uvfs_requests);
-    wake_up_interruptible(&Uvfs_driver_queue);
-    safe_sleep_on(&trans->fs_queue, &Uvfs_lock);
-    if (signal_pending(current))
+    if (uvfs_use_count == 0)
     {
+        trans->u.reply.generic.error = -EIO;
         spin_unlock(&Uvfs_lock);
-        while (!trans->answered)
-        {
-            /* while there are no requests to process run other processes */
-            schedule();
-        }
-        dprintk("Entering uvfs_make_request 0\n");
         return 0;
     }
+    list_add_tail(&trans->list, &Uvfs_requests);
+    wake_up_interruptible(&Uvfs_driver_queue);
     spin_unlock(&Uvfs_lock);
-    dprintk("Entering uvfs_make_request 1\n");
-    return 1;
+
+    /* Mask all signals except ALLOWED_SIGS while we wait */
+    spin_lock_irqsave(&current->sighand->siglock, irqflags);
+    oldset = current->blocked;
+    siginitsetinv(&current->blocked, ALLOWED_SIGS & ~oldset.sig[0]);
+    recalc_sigpending();
+    spin_unlock_irqrestore(&current->sighand->siglock, irqflags);
+
+    /* Wait while the request is processed */
+    wait_event_interruptible(trans->fs_queue, trans->answered);
+
+    /* Check to see if we were interrupted by a signal */
+    spin_lock(&Uvfs_lock);
+    if (signal_pending(current))
+    {
+        if (trans->in_use)
+        {
+            trans->abort = 1;
+            spin_unlock(&Uvfs_lock);
+            wait_event(trans->fs_queue, !trans->in_use);
+            spin_lock(&Uvfs_lock);
+        }
+        list_del_init(&trans->list);
+        trans->u.reply.generic.error = -ERESTARTSYS;
+    }
+    spin_unlock(&Uvfs_lock);
+
+    /* Restore the original signal mask */
+    spin_lock_irqsave(&current->sighand->siglock, irqflags);
+    current->blocked = oldset;
+    recalc_sigpending();
+    spin_unlock_irqrestore(&current->sighand->siglock, irqflags);
+
+    return 0;
 }
 
 
@@ -394,6 +412,8 @@ uvfs_transaction_s* uvfs_new_transaction(void)
     trans->serial = Serial_number++;
     init_waitqueue_head(&trans->fs_queue);
     INIT_LIST_HEAD(&trans->list);
+    trans->in_use = 0;
+    trans->abort = 0;
     trans->answered = 0;
     dprintk("Issued serial = %d\n", trans->serial);
     spin_unlock(&Uvfs_lock);

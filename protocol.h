@@ -2,7 +2,7 @@
  *   protocol.h -- kernel to user space protocol
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2006 Interwoven, Inc.
+ *   Copyright (C) 2004-2009 Interwoven, Inc.
  *
  *   This header file is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
@@ -368,6 +368,7 @@ typedef struct _uvfs_generic_rep_s
     int type;
     int serial;
     int size;
+    int error;
 } uvfs_generic_rep_s;
 
 

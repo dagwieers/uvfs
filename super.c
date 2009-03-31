@@ -2,7 +2,7 @@
  *   super.c -- superblock and inode functions
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2008 Interwoven, Inc.
+ *   Copyright (C) 2004-2009 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -21,10 +21,6 @@
 
 #include <linux/statfs.h>
 #include "uvfs.h"
-
-
-int uvfs_use_count = 0; // module use count
-
 
 void displayFhandle(const char* msg, uvfs_fhandle_s* fh)
 {
@@ -526,15 +522,6 @@ int uvfs_read_super(struct super_block* sb,
         dprintk("<1>Exited uvfs_read_super > UVFS_MAX_PATHLEN\n");
         return -ENAMETOOLONG;
     }
-    dprintk("<1>uvfs_read_super check server running\n");
-    // check if server is running
-    if(uvfs_use_count == 0)
-    {
-        // nope so return immediately
-        dprintk("<1>Exited uvfs_read_super server not running\n");
-        return -EIO;
-    }
-    // yes tell server to mount
     dprintk("<1>uvfs_read_super uvfs_new_transaction\n");
     trans = uvfs_new_transaction();
     if (trans == NULL)

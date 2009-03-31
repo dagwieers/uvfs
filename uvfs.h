@@ -2,7 +2,7 @@
  *   uvfs.h
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2008 Interwoven, Inc.
+ *   Copyright (C) 2004-2009 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -29,7 +29,7 @@
 
 #define UVFS_FS_NAME "pmfs"
 #define UVFS_LICENSE "GPL"
-#define UVFS_VERSION "2.0.2"
+#define UVFS_VERSION "2.0.3"
 
 struct uvfs_inode_info
 {
@@ -52,6 +52,8 @@ typedef struct _uvfs_transaction_s
         uvfs_reply_u reply;
     } u;
     int serial;
+    int in_use;
+    int abort;
     int answered;
 } uvfs_transaction_s;
 
@@ -78,7 +80,6 @@ extern int uvfs_dentry_revalidate(struct dentry *, struct nameidata *);
 extern int uvfs_permission(struct inode *, int, struct nameidata *);
 
 /* uvfs/driver.c */
-extern void safe_sleep_on(wait_queue_head_t *, spinlock_t *);
 extern int uvfs_make_request(uvfs_transaction_s *);
 extern uvfs_transaction_s* uvfs_new_transaction(void);
 

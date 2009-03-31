@@ -2,7 +2,7 @@
  *   file.c -- file operations
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2007 Interwoven, Inc.
+ *   Copyright (C) 2004-2009 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -266,6 +266,7 @@ int uvfs_setattr(struct dentry* entry, struct iattr* attr)
 {
     int error = 0;
     struct inode* inode;
+    unsigned int oldflags;
     uvfs_setattr_req_s* request;
     uvfs_setattr_rep_s* reply;
     uvfs_transaction_s* trans;
@@ -287,11 +288,14 @@ int uvfs_setattr(struct dentry* entry, struct iattr* attr)
        vmtruncate) we get an inconsistent page cache for the file.
        fsx will turn this up.
     */
-    if(inode_setattr(inode, attr))
+    oldflags = attr->ia_valid;
+    attr->ia_valid &= ~(ATTR_ATIME|ATTR_MTIME|ATTR_CTIME);
+    if (inode_setattr(inode, attr))
     {
         dprintk("uvfs_setattr: inode_setattr() failed\n");
         return -EINVAL;
     }
+    attr->ia_valid = oldflags;
     dprintk("uvfs_setattr: %s  mode %o\n", entry->d_name.name, attr->ia_mode);
 
     trans = uvfs_new_transaction();

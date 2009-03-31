@@ -16,7 +16,7 @@ int main(int argc, char* argv[])
     if (argc < 3)
     {
         fprintf(stderr, "usage: %s devname command\n", argv[0]);
-        fprintf(stderr, "where command can be 'shutdown' or 'showslots'\n");
+        fprintf(stderr, "where command can be 'shutdown' or 'status'\n");
         return 1;
     }
     int cmd;
@@ -40,46 +40,25 @@ int main(int argc, char* argv[])
     int fd = open(argv[1], O_RDONLY);
     if (fd < 0)
     {
-        perror("Couldn't open device\n");
+        perror("Couldn't open device");
         return 1;
-    }
-
-    // see if server is still mounted
-    int result = ioctl(fd, UVFS_IOCTL_MOUNT);
-    if (result < 0)
-    {
-        fprintf(stderr,"%s ", argv[0]);
-        perror("ioctl failed on /proc/fs/pmfs\n");
-        close(fd);
-        return 1;
-    }
-    if(cmd == UVFS_IOCTL_SHUTDOWN)
-    {
-         // if result = 1 then still mounted
-         if(result)
-         {
-             fprintf(stderr,"%s ", argv[0]);
-             fprintf(stderr,"iwserver is still mounted - umount\n");
-             return 1;
-         }
     }
 
     // execute requested command
-    result = ioctl(fd, cmd);
+    int result = ioctl(fd, cmd);
     if (result < 0)
     {
         fprintf(stderr,"%s ", argv[0]);
-        perror("ioctl failed on /proc/fs/pmfs\n");
+        perror("ioctl failed");
         close(fd);
         return 1;
     }
 
-    if(cmd == UVFS_IOCTL_USE_COUNT)
+    if (cmd == UVFS_IOCTL_USE_COUNT)
     {
-       fprintf(stdout,"opens on this module %d\n", result);
-       fflush(stdout);
+        fprintf(stdout, "opens on this module %d\n", result);
+        fflush(stdout);
     }
     close(fd);
     return 0;
 }
-

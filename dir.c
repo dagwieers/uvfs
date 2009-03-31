@@ -2,7 +2,7 @@
  *   dir.c -- directory operations
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2007 Interwoven, Inc.
+ *   Copyright (C) 2004-2009 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -589,6 +589,12 @@ int uvfs_dentry_revalidate(struct dentry * dentry, struct nameidata * nd)
     {
         dprintk("uvfs_dentry_revalidate: %s/%s lookup error=%d\n",
                 parent->d_name.name, dentry->d_name.name, error);
+
+        /* don't invalidate if the lookup was interrupted by a signal */
+        if (error == -ERESTARTSYS)
+        {
+            goto out;
+        }
         goto out_bad;
     }
 
@@ -602,11 +608,11 @@ int uvfs_dentry_revalidate(struct dentry * dentry, struct nameidata * nd)
     dprintk("uvfs_dentry_revalidate: %s/%s still valid\n",
             parent->d_name.name, dentry->d_name.name);
 
+out:
     dput(parent);
     return 1;
 
 out_bad:
-
     dput(parent);
     return 0;
 }
