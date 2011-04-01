@@ -2,7 +2,7 @@
  *   dir.c -- directory operations
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2009 Interwoven, Inc.
+ *   Copyright (C) 2004-2011 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -613,6 +613,12 @@ out:
     return 1;
 
 out_bad:
+    if (inode && S_ISDIR(inode->i_mode)) {
+        if (have_submounts(dentry))
+            goto out;
+        shrink_dcache_parent(dentry);
+    }
+    d_drop(dentry);
     dput(parent);
     return 0;
 }

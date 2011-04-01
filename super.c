@@ -2,7 +2,7 @@
  *   super.c -- superblock and inode functions
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2009 Interwoven, Inc.
+ *   Copyright (C) 2004-2011 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -343,8 +343,9 @@ struct dentry* uvfs_get_parent(struct dentry *child)
     if (!parent)
     {
         iput(inode);
-        parent = ERR_PTR(-ENOMEM);
+        return ERR_PTR(-ENOMEM);
     }
+    parent->d_op = &Uvfs_dentry_operations;
 
     debugDisplayFhandle("uvfs_get_parent: parent fh is: ", &fh);
     return parent;
@@ -419,8 +420,9 @@ struct dentry* uvfs_get_dentry(struct super_block *sb, void *inump)
         if (!result)
         {
             iput(inode);
-            result = ERR_PTR(-ENOMEM);
+            return ERR_PTR(-ENOMEM);
         }
+        result->d_op = &Uvfs_dentry_operations;
     }
 
     dprintk("<1>uvfs_get_dentry: returning 0x%p\n", result);

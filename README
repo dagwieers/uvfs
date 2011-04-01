@@ -1,14 +1,18 @@
-UVFS 2.0.3
+UVFS 2.0.4
 ----------
 
 This version of the uvfs module is designed for use with Interwoven's
-TeamSite 6.7.x product.
+TeamSite 6.7.x and 7.x products.
 
 This version of uvfs is NOT compatible with TeamSite 6.1.
 
 
 Changes
 -------
+
+2.0.4
+-----
+Fixed stale directory cache issues.
 
 2.0.3
 -----
@@ -37,11 +41,11 @@ on which it will be used.
 
 1. Extract the uvfs source code.
 
-    tar -xvzf uvfs_2.0.3.tar.gz
+    tar -xvzf uvfs_2.0.4.tar.gz
 
 2. Change to the extracted directory.
 
-    cd uvfs_2.0.3
+    cd uvfs_2.0.4
 
 3. Run 'gmake' without any arguments.
 
