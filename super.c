@@ -2,7 +2,7 @@
  *   super.c -- superblock and inode functions
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2011 Interwoven, Inc.
+ *   Copyright (C) 2004-2012 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -135,9 +135,7 @@ uvfs_iget(struct super_block *sb, uvfs_fhandle_s *fh, uvfs_attr_s *fattr)
         inode->i_mtime.tv_nsec = fattr->i_mtime.tv_nsec;
         inode->i_ctime.tv_sec = fattr->i_ctime.tv_sec;
         inode->i_ctime.tv_nsec = fattr->i_ctime.tv_nsec;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
-        inode->i_blkbits = fattr->i_blksize;
-#else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
         inode->i_blksize = fattr->i_blksize;
 #endif
         inode->i_blocks = fattr->i_blocks;
@@ -195,9 +193,7 @@ int uvfs_refresh_inode(struct inode *inode, uvfs_attr_s *fattr)
     inode->i_mtime.tv_nsec = fattr->i_mtime.tv_nsec;
     inode->i_ctime.tv_sec = fattr->i_ctime.tv_sec;
     inode->i_ctime.tv_nsec = fattr->i_ctime.tv_nsec;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
-    inode->i_blkbits = fattr->i_blksize;
-#else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
     inode->i_blksize = fattr->i_blksize;
 #endif
     inode->i_blocks = fattr->i_blocks;

@@ -2,7 +2,7 @@
  *   uvfs.h
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2011 Interwoven, Inc.
+ *   Copyright (C) 2004-2012 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -29,7 +29,7 @@
 
 #define UVFS_FS_NAME "pmfs"
 #define UVFS_LICENSE "GPL"
-#define UVFS_VERSION "2.0.4"
+#define UVFS_VERSION "2.0.5"
 
 struct uvfs_inode_info
 {
