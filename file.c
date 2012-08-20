@@ -2,7 +2,7 @@
  *   file.c -- file operations
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2009 Interwoven, Inc.
+ *   Copyright (C) 2004-2012 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -36,7 +36,11 @@ ssize_t uvfs_file_read(struct file* file,
 
     ret = uvfs_revalidate_inode(inode);
     if (!ret)
-         return generic_file_read(file, buf, count, offset);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+        return do_sync_read(file, buf, count, offset);
+#else
+        return generic_file_read(file, buf, count, offset);
+#endif
     return ret;
 }
 
@@ -55,7 +59,11 @@ ssize_t uvfs_file_write(struct file* file,
 
     ret = uvfs_revalidate_inode(inode);
     if (!ret)
-         return generic_file_write(file, buf, count, offset);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+        return do_sync_write(file, buf, count, offset);
+#else
+        return generic_file_write(file, buf, count, offset);
+#endif
     return ret;
 }
 
@@ -98,8 +106,8 @@ static int uvfs_write(struct inode* inode,
     request->type = UVFS_WRITE;
     request->serial = trans->serial;
     request->size = offsetof(uvfs_file_write_req_s, buff) + count;
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->fh = UVFS_I(inode)->fh;
     request->count = count;
     request->offset = offset;
@@ -179,8 +187,8 @@ int uvfs_readpage(struct file* filp, struct page* pg)
     request->type = UVFS_READ;
     request->serial = trans->serial;
     request->size = sizeof(*request);
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->fh = UVFS_I(inode)->fh;
     request->count = PAGE_CACHE_SIZE;
     request->offset = pg->index << PAGE_CACHE_SHIFT;
@@ -216,6 +224,51 @@ err:
     return error;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+
+int uvfs_write_begin(struct file *file, struct address_space *mapping,
+                     loff_t pos, unsigned len, unsigned flags,
+                     struct page **pagep, void **fsdata)
+{
+    struct page *page;
+    pgoff_t index;
+    unsigned from;
+
+    index = pos >> PAGE_CACHE_SHIFT;
+    from = pos & (PAGE_CACHE_SIZE - 1);
+
+    page = grab_cache_page_write_begin(mapping, index, flags);
+    if (!page)
+        return -ENOMEM;
+
+    *pagep = page;
+
+    return uvfs_prepare_write(file, page, from, from+len);
+}
+
+int uvfs_write_end(struct file *file, struct address_space *mapping,
+                   loff_t pos, unsigned len, unsigned copied,
+                   struct page *page, void *fsdata)
+{
+    unsigned from = pos & (PAGE_CACHE_SIZE - 1);
+
+    /* zero the stale part of the page if we did a short copy */
+    if (copied < len) {
+            void *kaddr = kmap_atomic(page, KM_USER0);
+            memset(kaddr + from + copied, 0, len - copied);
+            flush_dcache_page(page);
+            kunmap_atomic(kaddr, KM_USER0);
+    }
+
+    uvfs_commit_write(file, page, from, from+copied);
+
+    unlock_page(page);
+    page_cache_release(page);
+
+    return copied;
+}
+
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32) */
 
 /* uvfs this is a NOP but must be defined */
 int uvfs_prepare_write(struct file* filp, struct page* pg,
@@ -308,8 +361,8 @@ int uvfs_setattr(struct dentry* entry, struct iattr* attr)
     request->type = UVFS_SETATTR;
     request->serial = trans->serial;
     request->size = sizeof(*request);
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->fh = UVFS_I(inode)->fh;
     request->ia_valid = attr->ia_valid;
     request->ia_mode = attr->ia_mode;

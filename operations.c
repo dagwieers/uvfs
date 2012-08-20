@@ -2,7 +2,7 @@
  *   operations.c -- operations structs
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2007 Interwoven, Inc.
+ *   Copyright (C) 2004-2012 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -30,14 +30,23 @@ struct file_operations Uvfs_file_file_operations =
     .mmap           = uvfs_file_mmap,
     .open           = generic_file_open,
     .fsync          = file_fsync,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+    .aio_read       = generic_file_aio_read,
+    .aio_write      = generic_file_aio_write,
+#endif
 };
 
 struct address_space_operations Uvfs_file_aops =
 {
     .writepage      = uvfs_writepage,
     .readpage       = uvfs_readpage,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+    .write_begin    = uvfs_write_begin,
+    .write_end      = uvfs_write_end,
+#else
     .prepare_write  = uvfs_prepare_write,
     .commit_write   = uvfs_commit_write,
+#endif
 };
 
 struct inode_operations Uvfs_file_inode_operations =
@@ -90,16 +99,21 @@ struct super_operations Uvfs_super_operations =
 
 struct export_operations Uvfs_export_operations =
 {
-    .decode_fh      = uvfs_decode_fh,
     .encode_fh      = uvfs_encode_fh,
     .get_parent     = uvfs_get_parent,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+    .fh_to_dentry   = uvfs_fh_to_dentry,
+    .fh_to_parent   = uvfs_fh_to_parent,
+#else
+    .decode_fh      = uvfs_decode_fh,
     .get_dentry     = uvfs_get_dentry,
+#endif
 };
 
 struct file_system_type Uvfs_file_system_type =
 {
     .owner          = THIS_MODULE,
-    .name           = UVFS_FS_NAME,
+    .name           = UVFS_MODULE_NAME,
     .get_sb         = uvfs_get_sb,
     .kill_sb        = kill_anon_super,
 };

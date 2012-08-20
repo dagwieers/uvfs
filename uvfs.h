@@ -24,12 +24,23 @@
 
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/sched.h>
 #include <linux/version.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+#include <linux/cred.h>
+#include <linux/exportfs.h>
+#endif
 #include "protocol.h"
 
-#define UVFS_FS_NAME "pmfs"
+#define UVFS_MODULE_NAME "pmfs"
+#define UVFS_PROC_NAME "fs/pmfs"
 #define UVFS_LICENSE "GPL"
-#define UVFS_VERSION "2.0.5"
+#define UVFS_VERSION "2.0.6"
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
+#define current_fsuid() (current->fsuid)
+#define current_fsgid() (current->fsgid)
+#endif
 
 struct uvfs_inode_info
 {
@@ -77,7 +88,11 @@ extern int uvfs_rename(struct inode *, struct dentry *, struct inode *, struct d
 extern int uvfs_readdir(struct file *, void *, filldir_t);
 extern int uvfs_open(struct inode *, struct file *);
 extern int uvfs_dentry_revalidate(struct dentry *, struct nameidata *);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+extern int uvfs_permission(struct inode *, int);
+#else
 extern int uvfs_permission(struct inode *, int, struct nameidata *);
+#endif
 
 /* uvfs/driver.c */
 extern int uvfs_make_request(uvfs_transaction_s *);
@@ -86,6 +101,12 @@ extern uvfs_transaction_s* uvfs_new_transaction(void);
 /* uvfs/file.c */
 extern int uvfs_writepage(struct page *, struct writeback_control *);
 extern int uvfs_readpage(struct file *, struct page *);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+extern int uvfs_write_begin(struct file *, struct address_space *, loff_t,
+                            unsigned, unsigned, struct page **, void **);
+extern int uvfs_write_end(struct file *, struct address_space *, loff_t,
+                            unsigned, unsigned, struct page *, void *);
+#endif
 extern int uvfs_prepare_write(struct file *, struct page *, unsigned, unsigned);
 extern int uvfs_commit_write(struct file *, struct page *, unsigned, unsigned);
 extern int uvfs_setattr(struct dentry *, struct iattr *);
@@ -125,10 +146,15 @@ extern int uvfs_refresh_inode(struct inode *, uvfs_attr_s *);
 extern int uvfs_revalidate_inode(struct inode *);
 extern int uvfs_compare_inode(struct inode* inode, void* data);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+struct dentry *uvfs_fh_to_dentry(struct super_block *, struct fid *, int, int);
+struct dentry *uvfs_fh_to_parent(struct super_block *, struct fid *, int, int);
+#else
 struct dentry *uvfs_decode_fh(struct super_block *, __u32 *, int, int, int (*)(void *, struct dentry*), void *);
-int uvfs_encode_fh(struct dentry *dentry, __u32 *fh, int *max_len, int connectable);
-struct dentry* uvfs_get_dentry(struct super_block *sb, void *inump);
-struct dentry* uvfs_get_parent(struct dentry *child);
+#endif
+int uvfs_encode_fh(struct dentry *, __u32 *, int *, int);
+struct dentry* uvfs_get_dentry(struct super_block *, void *);
+struct dentry* uvfs_get_parent(struct dentry *);
 
 /* uvfs/symlink.c */
 extern int uvfs_readlink(struct dentry *, char *, int);

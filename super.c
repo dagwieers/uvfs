@@ -32,6 +32,65 @@ void displayFhandle(const char* msg, uvfs_fhandle_s* fh)
             fh->no_narid.na_aruid);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+
+static struct kmem_cache *uvfs_inode_cachep;
+
+struct inode *uvfs_alloc_inode(struct super_block *sb)
+{
+    struct uvfs_inode_info *uvfsi;
+    uvfsi = kmem_cache_alloc(uvfs_inode_cachep, GFP_KERNEL);
+    if (!uvfsi)
+        return NULL;
+    return &uvfsi->vfs_inode;
+}
+
+void uvfs_destroy_inode(struct inode *inode)
+{
+    kmem_cache_free(uvfs_inode_cachep, UVFS_I(inode));
+}
+
+static void init_once(void *foo)
+{
+    struct uvfs_inode_info *uvfsi = foo;
+
+    inode_init_once(&uvfsi->vfs_inode);
+}
+
+int uvfs_init_inodecache(void)
+{
+    uvfs_inode_cachep = kmem_cache_create("uvfs_inode_cache",
+                                          sizeof(struct uvfs_inode_info),
+                                          0, SLAB_RECLAIM_ACCOUNT,
+                                          init_once);
+    if (uvfs_inode_cachep == NULL)
+        return -ENOMEM;
+    return 0;
+}
+
+void uvfs_destroy_inodecache(void)
+{
+    kmem_cache_destroy(uvfs_inode_cachep);
+}
+
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32) */
+
+static kmem_cache_t *uvfs_inode_cachep;
+
+struct inode *uvfs_alloc_inode(struct super_block *sb)
+{
+    struct uvfs_inode_info *uvfsi;
+    uvfsi = kmem_cache_alloc(uvfs_inode_cachep, SLAB_KERNEL);
+    if (!uvfsi)
+        return NULL;
+    return &uvfsi->vfs_inode;
+}
+
+void uvfs_destroy_inode(struct inode *inode)
+{
+    kmem_cache_free(uvfs_inode_cachep, UVFS_I(inode));
+}
+
 static void init_once(void *foo, kmem_cache_t *cachep, unsigned long flags)
 {
     struct uvfs_inode_info *uvfsi = foo;
@@ -43,21 +102,14 @@ static void init_once(void *foo, kmem_cache_t *cachep, unsigned long flags)
     }
 }
 
-static kmem_cache_t *uvfs_inode_cachep;
 int uvfs_init_inodecache(void)
 {
     uvfs_inode_cachep = kmem_cache_create("uvfs_inode_cache",
-                        sizeof(struct uvfs_inode_info),
-                        0, SLAB_RECLAIM_ACCOUNT,
-                        init_once, NULL);
-
-    if (uvfs_inode_cachep == 0)
-    {
-        printk(KERN_ERR "uvfs_init_inodeache: "
-               "Couldn't initialize inode slabcache\n");
+                                          sizeof(struct uvfs_inode_info),
+                                          0, SLAB_RECLAIM_ACCOUNT,
+                                          init_once, NULL);
+    if (uvfs_inode_cachep == NULL)
         return -ENOMEM;
-    }
-
     return 0;
 }
 
@@ -67,23 +119,7 @@ void uvfs_destroy_inodecache(void)
         printk(KERN_INFO "uvfs_inode_cache: not all structures were freed\n");
 }
 
-
-struct inode *uvfs_alloc_inode(struct super_block *sb)
-{
-    struct uvfs_inode_info *uvfsi;
-
-    dprintk("<1>Entering uvfs_alloc_inode\n");
-    uvfsi = (struct uvfs_inode_info *)kmem_cache_alloc(uvfs_inode_cachep, SLAB_KERNEL);
-    if (!uvfsi)
-        return 0;
-
-    return &uvfsi->vfs_inode;
-}
-
-void uvfs_destroy_inode(struct inode *inode)
-{
-    kmem_cache_free(uvfs_inode_cachep, UVFS_I(inode));
-}
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32) */
 
 /* functions passed to iget5_locked */
 int uvfs_compare_inode(struct inode* inode, void* data)
@@ -179,7 +215,11 @@ int uvfs_refresh_inode(struct inode *inode, uvfs_attr_s *fattr)
         inode->i_mtime.tv_sec != fattr->i_mtime.tv_sec ||
         inode->i_mtime.tv_nsec != fattr->i_mtime.tv_nsec)
     {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
+        invalidate_inode_pages2(inode->i_mapping);
+#else
         invalidate_inode_pages(inode->i_mapping);
+#endif
     }
 
     inode->i_mode = fattr->i_mode;
@@ -220,8 +260,8 @@ int uvfs_revalidate_inode(struct inode *inode)
     request->type = UVFS_GETATTR;
     request->serial = trans->serial;
     request->size = sizeof(*request);
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->fh = UVFS_I(inode)->fh;
     uvfs_make_request(trans);
 
@@ -238,51 +278,74 @@ int uvfs_revalidate_inode(struct inode *inode)
     return error;
 }
 
-/*
- * uvfs_encode_fh - encode filehandle data for NFS export
- * @dentry:  the dentry to encode
- * @fh:      where to store the file handle fragment
- * @max_len: maximum length to store there
- * @connectable: whether to store parent information; we ignore this field.
- *
- * This function fills the export_operations->encode_fh operation
- * for the uvfs filesystem.  It can't use the default implementation
- * because we depend on more than just the 32bit inode number.
- *
- * Returns the type code for the fh fragment (we are currently supporting
- * a single type); returning 255 ultimately translates to NFSERR_OPNOTSUPP
- */
 int uvfs_encode_fh(struct dentry *dentry, __u32 *fh, int *max_len, int connectable)
 {
     struct inode *inode = dentry->d_inode;
+    int len = *max_len;
+    int type = 1;
 
     dprintk("<1>uvfs_encode_fh: called against %s\n", dentry->d_name.name);
     debugDisplayFhandle("uvfs_encode_fh: ", &UVFS_I(inode)->fh);
 
-    if (*max_len < 3)
+    if (len < 3 || (connectable && len < 5))
         return 255;
 
+    len = 3;
     fh[0] = UVFS_I(inode)->fh.no_narid.na_aruid;
     fh[1] = UVFS_I(inode)->fh.no_fspid.fs_sfuid;
     fh[2] = UVFS_I(inode)->fh.no_fspid.fs_sbxid;
+    if (connectable && !S_ISDIR(inode->i_mode))
+    {
+        struct inode *parent;
 
-    *max_len = 3;
-    return 1;
+        spin_lock(&dentry->d_lock);
+        parent = dentry->d_parent->d_inode;
+        fh[3] = UVFS_I(parent)->fh.no_fspid.fs_sfuid;
+        fh[4] = UVFS_I(parent)->fh.no_fspid.fs_sbxid;
+        spin_unlock(&dentry->d_lock);
+        len = 5;
+        type = 2;
+    }
+    *max_len = len;
+    return type;
 }
 
-/*
- * uvfs_decode_fh - decode filehandle data for NFS export
- * @sb:  The superblock
- * @fh:  pointer to the file handle fragment
- * @fh_len: length of file handle fragment
- * @fh_type:    value 1 => fh can be passed directly to get_dentry()
- * @acceptable: function for testing acceptability of dentrys
- * @content:    context for @acceptable
- *
- * Allocate a dentry for the given filehandle
- *
- * @NOTES: acceptable() will be nfsd_acceptable() for nfs exports.
- */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+
+struct dentry *uvfs_fh_to_dentry(struct super_block *sb, struct fid *fid,
+                                 int fh_len, int fh_type)
+{
+    uvfs_fhandle_s handle;
+
+    if (fh_len < 3 || fh_type > 2)
+        return NULL;
+
+    memset(&handle, 0, sizeof(handle));
+    handle.no_narid.na_aruid = fid->raw[0];
+    handle.no_fspid.fs_sfuid = fid->raw[1];
+    handle.no_fspid.fs_sbxid = fid->raw[2];
+
+    return uvfs_get_dentry(sb, &handle);
+}
+
+struct dentry *uvfs_fh_to_parent(struct super_block *sb, struct fid *fid,
+                                 int fh_len, int fh_type)
+{
+    uvfs_fhandle_s parent;
+
+    if (fh_len < 5 || fh_type != 2)
+        return NULL;
+
+    memset(&parent, 0, sizeof(parent));
+    parent.no_narid.na_aruid = fid->raw[0];
+    parent.no_fspid.fs_sfuid = fid->raw[3];
+    parent.no_fspid.fs_sbxid = fid->raw[4];
+
+    return uvfs_get_dentry(sb, &parent);
+}
+
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32) */
+
 struct dentry *uvfs_decode_fh(struct super_block *sb,
                               __u32 *fh,
                               int fh_len,
@@ -290,25 +353,34 @@ struct dentry *uvfs_decode_fh(struct super_block *sb,
                               int (*acceptable)(void *, struct dentry*),
                               void *context)
 {
-    uvfs_fhandle_s vfs_fh;
+    uvfs_fhandle_s handle, parent;
 
     dprintk("<1>uvfs_decode_fh: fh_len = %d, fh_type = %d\n", fh_len, fh_type);
 
-    memset(&vfs_fh, 0, sizeof(vfs_fh));
-    if (fh_type == 1)
+    switch(fh_type)
     {
-        vfs_fh.no_narid.na_aruid = fh[0];
-        vfs_fh.no_fspid.fs_sfuid = fh[1];
-        vfs_fh.no_fspid.fs_sbxid = fh[2];
-    }
-    else
-    {
+    case 2:
+        memset(&parent, 0, sizeof(parent));
+        parent.no_narid.na_aruid = fh[0];
+        parent.no_fspid.fs_sfuid = fh[3];
+        parent.no_fspid.fs_sbxid = fh[4];
+    case 1:
+        memset(&handle, 0, sizeof(handle));
+        handle.no_narid.na_aruid = fh[0];
+        handle.no_fspid.fs_sfuid = fh[1];
+        handle.no_fspid.fs_sbxid = fh[2];
+        break;
+    default:
         dprintk("<1>uvfs_decode_fh() got unexpected fh_type %d\n", fh_type);
         return 0;
     }
 
-    return sb->s_export_op->find_exported_dentry(sb, &vfs_fh, 0, acceptable, context);
+    return sb->s_export_op->find_exported_dentry(sb, &handle,
+                                                 (fh_type == 2) ? &parent : 0,
+                                                 acceptable, context);
 }
+
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32) */
 
 /*
  * called with child->d_inode->i_sem down
@@ -335,6 +407,13 @@ struct dentry* uvfs_get_parent(struct dentry *child)
     if (!inode)
         return ERR_PTR(-EACCES);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+    parent = d_obtain_alias(inode);
+    if (!IS_ERR(parent))
+    {
+        parent->d_op = &Uvfs_dentry_operations;
+    }
+#else
     parent = d_alloc_anon(inode);
     if (!parent)
     {
@@ -342,6 +421,7 @@ struct dentry* uvfs_get_parent(struct dentry *child)
         return ERR_PTR(-ENOMEM);
     }
     parent->d_op = &Uvfs_dentry_operations;
+#endif
 
     debugDisplayFhandle("uvfs_get_parent: parent fh is: ", &fh);
     return parent;
@@ -377,8 +457,8 @@ struct dentry* uvfs_get_dentry(struct super_block *sb, void *inump)
         request->type = UVFS_GETATTR;
         request->serial = trans->serial;
         request->size = sizeof(*request);
-        request->uid = current->fsuid;
-        request->gid = current->fsgid;
+        request->uid = current_fsuid();
+        request->gid = current_fsgid();
         request->fh = *fh;
         uvfs_make_request(trans);
 
@@ -412,6 +492,13 @@ struct dentry* uvfs_get_dentry(struct super_block *sb, void *inump)
 
     if (inode)
     {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+        result = d_obtain_alias(inode);
+        if (!IS_ERR(result))
+        {
+            result->d_op = &Uvfs_dentry_operations;
+        }
+#else
         result = d_alloc_anon(inode);
         if (!result)
         {
@@ -419,6 +506,7 @@ struct dentry* uvfs_get_dentry(struct super_block *sb, void *inump)
             return ERR_PTR(-ENOMEM);
         }
         result->d_op = &Uvfs_dentry_operations;
+#endif
     }
 
     dprintk("<1>uvfs_get_dentry: returning 0x%p\n", result);
@@ -532,8 +620,8 @@ int uvfs_read_super(struct super_block* sb,
     request->type = UVFS_READ_SUPER;
     request->serial = trans->serial;
     request->size = offsetof(uvfs_read_super_req_s, buff) + arglength;
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->arglength = arglength;
     memcpy(request->buff, arg, arglength);
     dprintk("<1>uvfs_read_super uvfs_make_request\n");

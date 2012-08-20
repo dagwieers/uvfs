@@ -2,7 +2,7 @@
  *   symlink.c -- symlink operations
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2008 Interwoven, Inc.
+ *   Copyright (C) 2004-2012 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -38,8 +38,8 @@ int uvfs_readlink(struct dentry *dentry, char *buffer, int buflen)
     request->type = UVFS_READLINK;
     request->serial = trans->serial;
     request->size = sizeof(*request);
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->fh = UVFS_I(inode)->fh;
     uvfs_make_request(trans);
 
@@ -82,8 +82,8 @@ int uvfs_follow_link(struct dentry *dentry, struct nameidata *nd)
     request->type = UVFS_READLINK;
     request->serial = trans->serial;
     request->size = sizeof(*request);
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->fh = UVFS_I(inode)->fh;
     uvfs_make_request(trans);
 

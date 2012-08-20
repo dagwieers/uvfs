@@ -1,4 +1,4 @@
-UVFS 2.0.5
+UVFS 2.0.6
 ----------
 
 This version of the uvfs module is designed for use with Interwoven's
@@ -9,6 +9,11 @@ This version of uvfs is NOT compatible with TeamSite 6.1.
 
 Changes
 -------
+
+2.0.6
+-----
+Support for Red Hat Enterprise Linux 6.
+Fixed intermittent read corruption issue.
 
 2.0.5
 -----
@@ -45,11 +50,11 @@ on which it will be used.
 
 1. Extract the uvfs source code.
 
-    tar -xvzf uvfs_2.0.5.tar.gz
+    tar -xvzf uvfs_2.0.6.tar.gz
 
 2. Change to the extracted directory.
 
-    cd uvfs_2.0.5
+    cd uvfs_2.0.6
 
 3. Run 'gmake' without any arguments.
 

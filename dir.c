@@ -2,7 +2,7 @@
  *   dir.c -- directory operations
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2011 Interwoven, Inc.
+ *   Copyright (C) 2004-2012 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -53,8 +53,8 @@ int uvfs_create(struct inode* dir,
     memcpy(request->name, entry->d_name.name, entry->d_name.len);
     request->namelen = entry->d_name.len;
     request->fh = UVFS_I(dir)->fh;
-    request->uid = current->fsuid;
-    request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid : current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid : current_fsgid();
     request->mode = mode;
     dprintk("uvfs_create: name %s  mode %o\n", entry->d_name.name, mode);
     uvfs_make_request(trans);
@@ -113,8 +113,8 @@ int uvfs_lookup_by_name(struct inode* dir, struct qstr* filename, uvfs_fhandle_s
     request->size = offsetof(uvfs_lookup_req_s, name) + filename->len;
     memcpy(request->name, filename->name, filename->len);
     request->namelen = filename->len;
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->fh = UVFS_I(dir)->fh;
     uvfs_make_request(trans);
 
@@ -207,8 +207,8 @@ int uvfs_unlink(struct inode* dir, struct dentry* entry)
     request->type = UVFS_UNLINK;
     request->serial = trans->serial;
     request->size = offsetof(uvfs_unlink_req_s, name) + entry->d_name.len;
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->fh = UVFS_I(dir)->fh;
     memcpy(request->name, entry->d_name.name, entry->d_name.len);
     request->namelen = entry->d_name.len;
@@ -266,8 +266,8 @@ int uvfs_symlink(struct inode* dir,
     request->type = UVFS_SYMLINK;
     request->serial = trans->serial;
     request->size = sizeof(*request);
-    request->uid = current->fsuid;
-    request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid : current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid : current_fsgid();
     request->fh = UVFS_I(dir)->fh;
     memcpy(request->name, entry->d_name.name, entry->d_name.len);
     request->namelen = entry->d_name.len;
@@ -333,8 +333,8 @@ int uvfs_mkdir(struct inode* dir,
     memcpy(request->name, entry->d_name.name, entry->d_name.len);
     request->namelen = entry->d_name.len;
     request->fh = UVFS_I(dir)->fh;
-    request->uid = current->fsuid;
-    request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid : current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid : current_fsgid();
     request->mode = mode | S_IFDIR;
     if (dir->i_mode & S_ISGID)
         request->mode |= S_ISGID;
@@ -392,8 +392,8 @@ int uvfs_rmdir(struct inode* dir, struct dentry* entry)
     request->type = UVFS_RMDIR;
     request->serial = trans->serial;
     request->size = offsetof(uvfs_rmdir_req_s, name) + entry->d_name.len;
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->fh = UVFS_I(dir)->fh;
     memcpy(request->name, entry->d_name.name, entry->d_name.len);
     request->namelen = entry->d_name.len;
@@ -446,8 +446,8 @@ int uvfs_rename(struct inode* srcdir,
     request->type = UVFS_RENAME;
     request->serial = trans->serial;
     request->size = sizeof(*request);
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->fh_old = UVFS_I(srcdir)->fh;
     memcpy(request->old_name, srcentry->d_name.name, srcentry->d_name.len);
     request->old_namelen = srcentry->d_name.len;
@@ -514,8 +514,8 @@ int uvfs_readdir(struct file* filp,
         request->serial = trans->serial;
         request->size = sizeof(*request);
         request->entry_no = filp->f_pos;
-        request->uid = current->fsuid;
-        request->gid = current->fsgid;
+        request->uid = current_fsuid();
+        request->gid = current_fsgid();
         request->fh = UVFS_I(dir)->fh;
         uvfs_make_request(trans);
 
@@ -623,13 +623,19 @@ out_bad:
     return 0;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+int uvfs_permission(struct inode *inode, int mask)
+#else
 int uvfs_permission(struct inode *inode, int mask, struct nameidata *nd)
+#endif
 {
     int error = 0;
     uvfs_getattr_req_s* request;
     uvfs_getattr_rep_s* reply;
     uvfs_transaction_s* trans;
     umode_t mode = inode->i_mode;
+
+    mask &= MAY_READ | MAY_WRITE | MAY_EXEC;
 
     if (mask & MAY_WRITE) {
         /*
@@ -655,8 +661,8 @@ int uvfs_permission(struct inode *inode, int mask, struct nameidata *nd)
     request->type = UVFS_GETATTR;
     request->serial = trans->serial;
     request->size = sizeof(*request);
-    request->uid = current->fsuid;
-    request->gid = current->fsgid;
+    request->uid = current_fsuid();
+    request->gid = current_fsgid();
     request->fh = UVFS_I(inode)->fh;
     uvfs_make_request(trans);
 
@@ -669,7 +675,7 @@ int uvfs_permission(struct inode *inode, int mask, struct nameidata *nd)
 
     mode = reply->a.i_mode;
 
-    if (current->fsuid == inode->i_uid)
+    if (current_fsuid() == inode->i_uid)
         mode >>= 6;
     else if (in_group_p(inode->i_gid))
         mode >>= 3;

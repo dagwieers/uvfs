@@ -2,7 +2,7 @@
  *   driver.c -- conduit from kernel to user space
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2009 Interwoven, Inc.
+ *   Copyright (C) 2004-2012 Interwoven, Inc.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -433,20 +433,19 @@ static int __init uvfs_init(void)
     spin_lock_init(&Uvfs_lock);
     init_waitqueue_head(&Uvfs_driver_queue);
 
-    dprintk("<1>uvfs_init(/proc/fs/%s)\n", UVFS_FS_NAME);
+    dprintk("<1>uvfs_init(/proc/%s)\n", UVFS_PROC_NAME);
 
-    uvfs_proc_file =
-        create_proc_entry(UVFS_FS_NAME, S_IFREG | 0600, proc_root_fs);
+    uvfs_proc_file = create_proc_entry(UVFS_PROC_NAME, S_IFREG | 0600, NULL);
     if (uvfs_proc_file == NULL)
     {
-        dprintk("<1>Could not create /proc/fs/%s\n", UVFS_FS_NAME);
+        dprintk("<1>Could not create /proc/%s\n", UVFS_PROC_NAME);
         return -EIO;
     }
     uvfs_proc_file->proc_fops = &Uvfsd_file_operations;
     result = register_filesystem(&Uvfs_file_system_type);
     if (result < 0)
     {
-        remove_proc_entry(UVFS_FS_NAME, proc_root_fs);
+        remove_proc_entry(UVFS_PROC_NAME, NULL);
         return result;
     }
     if (uvfs_init_inodecache())
@@ -464,9 +463,9 @@ static int __init uvfs_init(void)
  */
 static void __exit uvfs_cleanup(void)
 {
-    dprintk("<1>uvfs_cleanup(/proc/fs/%s)\n", UVFS_FS_NAME);
+    dprintk("<1>uvfs_cleanup(/proc/%s)\n", UVFS_PROC_NAME);
     unregister_filesystem(&Uvfs_file_system_type);
-    remove_proc_entry(UVFS_FS_NAME, proc_root_fs);
+    remove_proc_entry(UVFS_PROC_NAME, NULL);
     uvfs_destroy_inodecache();
 }
 

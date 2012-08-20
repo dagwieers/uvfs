@@ -8,7 +8,7 @@ CXXFLAGS = -g -O3 -Wall $(INCLUDES) $(DEFINES) -I.
 
 LIBS = -lpthread -lc -lstdc++ -lm
 
-CFLAGS += $(DPRINTK) -D__KERNEL__ -DMODULE -DUVFS_FS_NAME='"pmfs"' -O -Wall
+EXTRA_CFLAGS += $(DPRINTK) -D__KERNEL__ -DMODULE -O -Wall
 
 KERNELPATH := /lib/modules/$(shell uname -r)/build
 
