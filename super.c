@@ -177,6 +177,8 @@ uvfs_iget(struct super_block *sb, uvfs_fhandle_s *fh, uvfs_attr_s *fattr)
         inode->i_blocks = fattr->i_blocks;
         inode->i_rdev = fattr->devno;
 
+        UVFS_I(inode)->attr_uid = current_fsuid();
+
         if (S_ISREG(inode->i_mode))
         {
             inode->i_op = &Uvfs_file_inode_operations;
@@ -238,6 +240,8 @@ int uvfs_refresh_inode(struct inode *inode, uvfs_attr_s *fattr)
 #endif
     inode->i_blocks = fattr->i_blocks;
     inode->i_rdev = fattr->devno;
+
+    UVFS_I(inode)->attr_uid = current_fsuid();
 
     return 0;
 }

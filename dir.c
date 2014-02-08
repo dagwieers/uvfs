@@ -633,6 +633,7 @@ int uvfs_permission(struct inode *inode, int mask, struct nameidata *nd)
     uvfs_getattr_req_s* request;
     uvfs_getattr_rep_s* reply;
     uvfs_transaction_s* trans;
+    umode_t i_mode = inode->i_mode;
     umode_t mode = inode->i_mode;
 
     mask &= MAY_READ | MAY_WRITE | MAY_EXEC;
@@ -652,28 +653,33 @@ int uvfs_permission(struct inode *inode, int mask, struct nameidata *nd)
             return -EACCES;
     }
 
-    trans = uvfs_new_transaction();
-    if (trans == NULL)
+    if (current_fsuid() != UVFS_I(inode)->attr_uid)
     {
-        return -ENOMEM;
-    }
-    request = &trans->u.request.getattr;
-    request->type = UVFS_GETATTR;
-    request->serial = trans->serial;
-    request->size = sizeof(*request);
-    request->uid = current_fsuid();
-    request->gid = current_fsgid();
-    request->fh = UVFS_I(inode)->fh;
-    uvfs_make_request(trans);
+        trans = uvfs_new_transaction();
+        if (trans == NULL)
+        {
+            return -ENOMEM;
+        }
+        request = &trans->u.request.getattr;
+        request->type = UVFS_GETATTR;
+        request->serial = trans->serial;
+        request->size = sizeof(*request);
+        request->uid = current_fsuid();
+        request->gid = current_fsgid();
+        request->fh = UVFS_I(inode)->fh;
+        uvfs_make_request(trans);
 
-    reply = &trans->u.reply.getattr;
-    error = reply->error;
-    if (error)
-    {
-        goto out;
+        reply = &trans->u.reply.getattr;
+        error = reply->error;
+        if (error)
+        {
+            kfree(trans);
+            return error;
+        }
+        i_mode = reply->a.i_mode;
+        mode = reply->a.i_mode;
+        kfree(trans);
     }
-
-    mode = reply->a.i_mode;
 
     if (current_fsuid() == inode->i_uid)
         mode >>= 6;
@@ -684,27 +690,22 @@ int uvfs_permission(struct inode *inode, int mask, struct nameidata *nd)
      * If the DACs are ok we don't need any capability check.
      */
     if (((mode & mask & (MAY_READ|MAY_WRITE|MAY_EXEC)) == mask))
-        goto out;
+        return 0;
 
     /*
      * Read/write DACs are always overridable.
      * Executable DACs are overridable if at least one exec bit is set.
      */
-    if (!(mask & MAY_EXEC) ||
-        (reply->a.i_mode & S_IXUGO) || S_ISDIR(reply->a.i_mode))
+    if (!(mask & MAY_EXEC) || (i_mode & S_IXUGO) || S_ISDIR(i_mode))
         if (capable(CAP_DAC_OVERRIDE))
-            goto out;
+            return 0;
 
     /*
      * Searching includes executable on directories, else just read.
      */
-    if (mask == MAY_READ || (S_ISDIR(reply->a.i_mode) && !(mask & MAY_WRITE)))
+    if (mask == MAY_READ || (S_ISDIR(i_mode) && !(mask & MAY_WRITE)))
         if (capable(CAP_DAC_READ_SEARCH))
-            goto out;
+            return 0;
 
-    error = -EACCES;
-
-out:
-    kfree(trans);
-    return error;
+    return -EACCES;
 }

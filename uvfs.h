@@ -35,7 +35,7 @@
 #define UVFS_MODULE_NAME "pmfs"
 #define UVFS_PROC_NAME "fs/pmfs"
 #define UVFS_LICENSE "GPL"
-#define UVFS_VERSION "2.0.6"
+#define UVFS_VERSION "2.0.6-1"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
 #define current_fsuid() (current->fsuid)
@@ -45,6 +45,7 @@
 struct uvfs_inode_info
 {
     struct _uvfs_fhandle_s fh;
+    uid_t attr_uid;
     struct inode vfs_inode;
 };
 
