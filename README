@@ -1,18 +1,25 @@
-UVFS 2.0.6
+UVFS 2.0.8
 ----------
+This version of UVFS adds support for Linux kernel version 3.10. It is designed to use only with OpenText TeamSite 8.2 and 
+was tested with RHEL versions 7.1 and 7.2, and CentOS versions 7.1 and 7.2
 
-This version of the uvfs module is designed for use with Interwoven's
-TeamSite 6.7.x and 7.x products.
-
-This version of uvfs is NOT compatible with TeamSite 6.1.
+Use UVFS 2.0.7 for RHEL 6.x (and supported releases of OpenText TeamSite 8.1 and earlier).
 
 
 Changes
 -------
 
+2.0.8
+-----
+Added support for Linux kernel version 3.10.
+
+2.0.7
+-----
+Fixed performance issue.
+
 2.0.6
 -----
-Support for Red Hat Enterprise Linux 6.
+Added support for Red Hat Enterprise Linux 6.
 Fixed intermittent read corruption issue.
 
 2.0.5
@@ -28,11 +35,11 @@ Fixed stale directory cache issues.
 Fixed intermittent read corruption issue.
 Fixed file system hang after server crash.
 Fixed misc signal handling issues.
-Allow shutdown while mounts are still active.
+Added to allow shutdown while mounts are still active.
 
 2.0.2
 -----
-Support for Red Hat Enterprise Linux 5.
+Added support for Red Hat Enterprise Linux 5.
 
 2.0.1
 -----
@@ -45,18 +52,18 @@ Added module version information.
 Build
 -----
 
-To insure compatibility, the uvfs module should be compiled on the system
+To insure compatibility, the UVFS module should be compiled on the system
 on which it will be used.
 
-1. Extract the uvfs source code.
+1. Extract the UVFS source code:
 
-    tar -xvzf uvfs_2.0.6.tar.gz
+    tar -xvzf uvfs_2.0.8.tar.gz
 
-2. Change to the extracted directory.
+2. Change to the extracted directory:
 
-    cd uvfs_2.0.6
+    cd uvfs_2.0.8
 
-3. Run 'gmake' without any arguments.
+3. Run 'gmake' without any arguments:
 
     gmake
 
@@ -64,16 +71,16 @@ on which it will be used.
 Install
 -------
 
-The TeamSite installer will ask for the location of the compiled uvfs
+The TeamSite installer will ask for the location of the compiled UVFS
 module and copy the necessary files into the TeamSite installation.
 
-To manually install the uvfs module for use with TeamSite, copy 'pmfs.ko'
+To manually install the UVFS module for use with TeamSite, copy 'pmfs.ko'
 and 'uvfs_signal' to the <iw-home>/kernel directory.
 
 
 History
 -------
 
-The original uvfs module was written by Britt Park and is available
+The original UVFS module was written by Britt Park and is available
 from www.sciencething.org.
 

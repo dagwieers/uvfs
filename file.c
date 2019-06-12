@@ -27,14 +27,18 @@ ssize_t uvfs_file_read(struct file* file,
                        size_t count,
                        loff_t* offset)
 {
-    struct dentry * dentry = file->f_dentry;
-    struct inode * inode = dentry->d_inode;
+    struct dentry * dentry;
+    struct inode * inode;
     int ret;
 
+    dprintk("Entering uvfs_file_read\n");
+    dentry = file->f_dentry;
+    inode = dentry->d_inode;
     dprintk("<1>uvfs_file_read(%s/%s)\n",
             dentry->d_parent->d_name.name, dentry->d_name.name);
 
     ret = uvfs_revalidate_inode(inode);
+    dprintk("<1>uvfs_file_read: uvfs_revalidate_inode returned (%d)\n", ret);
     if (!ret)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
         return do_sync_read(file, buf, count, offset);
@@ -50,14 +54,18 @@ ssize_t uvfs_file_write(struct file* file,
                         size_t count,
                         loff_t* offset)
 {
-    struct dentry * dentry = file->f_dentry;
-    struct inode * inode = dentry->d_inode;
+    struct dentry * dentry;
+    struct inode * inode;
     int ret;
 
+    dprintk("Entering uvfs_file_write\n");
+    dentry = file->f_dentry;
+    inode = dentry->d_inode;
     dprintk("<1>uvfs_file_write(%s/%s)\n",
             dentry->d_parent->d_name.name, dentry->d_name.name);
 
     ret = uvfs_revalidate_inode(inode);
+    dprintk("<1>uvfs_file_write: uvfs_revalidate_inode returned (%d)\n", ret);
     if (!ret)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
         return do_sync_write(file, buf, count, offset);
@@ -70,14 +78,18 @@ ssize_t uvfs_file_write(struct file* file,
 
 int uvfs_file_mmap(struct file* file, struct vm_area_struct* vma)
 {
-    struct dentry * dentry = file->f_dentry;
-    struct inode * inode = dentry->d_inode;
+    struct dentry * dentry;
+    struct inode * inode;
     int ret;
 
+    dprintk("Entering uvfs_file_mmap\n");
+    dentry = file->f_dentry;
+    inode = dentry->d_inode;
     dprintk("<1>uvfs_file_mmap(%s/%s)\n",
             dentry->d_parent->d_name.name, dentry->d_name.name);
 
     ret = uvfs_revalidate_inode(inode);
+    dprintk("<1>uvfs_file_mmap: uvfs_revalidate_inode returned (%d)\n", ret);
     if (!ret)
         ret = generic_file_mmap(file, vma);
     return ret;
@@ -106,8 +118,13 @@ static int uvfs_write(struct inode* inode,
     request->type = UVFS_WRITE;
     request->serial = trans->serial;
     request->size = offsetof(uvfs_file_write_req_s, buff) + count;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
+    request->uid = current_fsuid().val;
+    request->gid = current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = current_fsgid();
+#endif
     request->fh = UVFS_I(inode)->fh;
     request->count = count;
     request->offset = offset;
@@ -177,7 +194,7 @@ int uvfs_readpage(struct file* filp, struct page* pg)
     uvfs_file_read_rep_s* reply;
     uvfs_transaction_s* trans;
 
-    dprintk("<1>Entering uvfs_readpage\n");
+    dprintk("<1>Entering uvfs_readpage inode=%p\n",inode);
     trans = uvfs_new_transaction();
     if (trans == NULL)
     {
@@ -187,14 +204,21 @@ int uvfs_readpage(struct file* filp, struct page* pg)
     request->type = UVFS_READ;
     request->serial = trans->serial;
     request->size = sizeof(*request);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
+    request->uid = current_fsuid().val;
+    request->gid = current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = current_fsgid();
+#endif
     request->fh = UVFS_I(inode)->fh;
     request->count = PAGE_CACHE_SIZE;
     request->offset = pg->index << PAGE_CACHE_SHIFT;
+    dprintk("<1>uvfs_readpage: count:%d, offset=%d\n",  request->count,  request->offset);
     uvfs_make_request(trans);
 
     reply = &trans->u.reply.file_read;
+    dprintk("<1>uvfs_readpage: error:%d, bytes_read=%d\n",  reply->error, reply->bytes_read);
     /* Q? should we fill in the page if there was an error? */
     if (reply->error < 0)
     {
@@ -234,6 +258,7 @@ int uvfs_write_begin(struct file *file, struct address_space *mapping,
     pgoff_t index;
     unsigned from;
 
+    dprintk("<1>Entering uvfs_write_begin\n");
     index = pos >> PAGE_CACHE_SHIFT;
     from = pos & (PAGE_CACHE_SIZE - 1);
 
@@ -242,7 +267,7 @@ int uvfs_write_begin(struct file *file, struct address_space *mapping,
         return -ENOMEM;
 
     *pagep = page;
-
+    dprintk("<1>Exiting uvfs_write_begin\n");
     return uvfs_prepare_write(file, page, from, from+len);
 }
 
@@ -252,19 +277,28 @@ int uvfs_write_end(struct file *file, struct address_space *mapping,
 {
     unsigned from = pos & (PAGE_CACHE_SIZE - 1);
 
+    dprintk("<1>Entering uvfs_write_end\n");
     /* zero the stale part of the page if we did a short copy */
     if (copied < len) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+            void *kaddr = kmap_atomic(page);
+#else
             void *kaddr = kmap_atomic(page, KM_USER0);
+#endif
             memset(kaddr + from + copied, 0, len - copied);
             flush_dcache_page(page);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+            kunmap_atomic(kaddr);
+#else
             kunmap_atomic(kaddr, KM_USER0);
+#endif
     }
 
     uvfs_commit_write(file, page, from, from+copied);
 
     unlock_page(page);
     page_cache_release(page);
-
+    dprintk("<1>Exiting uvfs_write_end\n");
     return copied;
 }
 
@@ -293,7 +327,7 @@ int uvfs_commit_write(struct file* filp, struct page* pg,
     int retval;
     struct inode* inode = pg->mapping->host;
 
-    dprintk("<1>Entering uvfs_commit_write inode %x\n", (unsigned int)inode);
+    dprintk("<1>Entering uvfs_commit_write inode %p\n", inode);
     count = to - offset;
     off = (pg->index << PAGE_CACHE_SHIFT) + offset;
     buff = kmap(pg);
@@ -343,11 +377,21 @@ int uvfs_setattr(struct dentry* entry, struct iattr* attr)
     */
     oldflags = attr->ia_valid;
     attr->ia_valid &= ~(ATTR_ATIME|ATTR_MTIME|ATTR_CTIME);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+    if(inode_change_ok(inode, attr))
+    {
+        dprintk("uvfs_setattr: inode_setattr() failed\n");
+        return -EINVAL;
+    }
+    setattr_copy(inode, attr);
+    mark_inode_dirty(inode);
+#else
     if (inode_setattr(inode, attr))
     {
         dprintk("uvfs_setattr: inode_setattr() failed\n");
         return -EINVAL;
     }
+#endif
     attr->ia_valid = oldflags;
     dprintk("uvfs_setattr: %s  mode %o\n", entry->d_name.name, attr->ia_mode);
 
@@ -361,13 +405,23 @@ int uvfs_setattr(struct dentry* entry, struct iattr* attr)
     request->type = UVFS_SETATTR;
     request->serial = trans->serial;
     request->size = sizeof(*request);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
+    request->uid = current_fsuid().val;
+    request->gid = current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = current_fsgid();
+#endif
     request->fh = UVFS_I(inode)->fh;
     request->ia_valid = attr->ia_valid;
     request->ia_mode = attr->ia_mode;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
+    request->ia_uid = attr->ia_uid.val;
+    request->ia_gid = attr->ia_gid.val;
+#else
     request->ia_uid = attr->ia_uid;
     request->ia_gid = attr->ia_gid;
+#endif
     request->ia_size = attr->ia_size;
     request->ia_atime.tv_sec = attr->ia_atime.tv_sec;
     request->ia_atime.tv_nsec = attr->ia_atime.tv_nsec;
@@ -390,9 +444,11 @@ int uvfs_setattr(struct dentry* entry, struct iattr* attr)
 
 int uvfs_getattr(struct vfsmount *mnt, struct dentry* entry, struct kstat* stat)
 {
-    struct inode *inode = entry->d_inode;
+    struct inode *inode;
     int error;
-
+    dprintk("<1>Entered uvfs_getattr\n");
+    inode = entry->d_inode;
+    dprintk("<1>Entered uvfs_getattr for %s inode=%p\n", entry->d_name.name, inode);
     error = uvfs_revalidate_inode(inode);
 
     /*
@@ -403,5 +459,6 @@ int uvfs_getattr(struct vfsmount *mnt, struct dentry* entry, struct kstat* stat)
      */
     generic_fillattr(inode, stat);
 
+    dprintk("<1>Exiting uvfs_getattr error=%d, mode=%x\n", error, stat->mode);
     return error;
 }

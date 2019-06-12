@@ -30,7 +30,11 @@ static int uvfsd_open(struct inode *, struct file *);
 static int uvfsd_release(struct inode *, struct file *);
 static ssize_t uvfsd_read(struct file *, char *, size_t, loff_t *);
 static ssize_t uvfsd_write(struct file *, const char *, size_t, loff_t *);
+#if (LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,35))
 static int uvfsd_ioctl(struct inode *, struct file *, unsigned int, unsigned long);
+#else
+static long uvfsd_unlocked_ioctl(struct file *, unsigned int, unsigned long);
+#endif
 
 /*
  * file operations defined for the pmfs
@@ -43,7 +47,11 @@ struct file_operations Uvfsd_file_operations =
     .release        = uvfsd_release,
     .read           = uvfsd_read,
     .write          = uvfsd_write,
+#if (LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,35))
     .ioctl          = uvfsd_ioctl,
+#else
+    .unlocked_ioctl          = uvfsd_unlocked_ioctl,
+#endif
 };
 
 static struct proc_dir_entry* uvfs_proc_file;
@@ -145,7 +153,7 @@ static ssize_t uvfsd_read(struct file* filp,
     /* Check for bogus count. */
     if (count < sizeof(uvfs_request_u))
     {
-        dprintk("<1>uvfsd_read EIO (%d)(%d)\n", count, sizeof(uvfs_request_u));
+        dprintk("<1>uvfsd_read EIO (%zu)(%lu)\n", count, sizeof(uvfs_request_u));
         return -EIO;
     }
     /* Grab the lock */
@@ -206,7 +214,8 @@ static ssize_t uvfsd_read(struct file* filp,
     if (trans->abort)
         wake_up(&trans->fs_queue);
     spin_unlock(&Uvfs_lock);
-    dprintk("<1>Exited uvfsd_read: %d (%d)\n",
+    dprintk("<1>Exited uvfsd_read: type=%d %d (%d)\n",
+    		request->type,
             request->size,
             current->pid);
     if(ret)
@@ -229,7 +238,7 @@ static ssize_t uvfsd_write(struct file* file,
     uvfs_transaction_s* trans = NULL;
     if (count < sizeof(uvfs_generic_rep_s))
     {
-        dprintk("<1>uvfsd_write Undersized reply (%d).\n", count);
+        dprintk("<1>uvfsd_write Undersized reply (%zu).\n", count);
         return -EIO;
     }
     if (copy_from_user(&reply, buff, sizeof(reply)))
@@ -237,12 +246,13 @@ static ssize_t uvfsd_write(struct file* file,
         dprintk("<1>copy_from_user failed in uvfsd_write.\n");
         return -EFAULT;
     }
-    dprintk("<1>Entered uvfsd_write: serial=%d (%d)\n",
+    dprintk("<1>Entered uvfsd_write: type=%d serial=%d (%d)\n",
+    		reply.type,
             reply.serial,
             current->pid);
     if (reply.size != count)
     {
-        dprintk("<1>Mismatched write size in uvfsd_write %d %d\n",
+        dprintk("<1>Mismatched write size in uvfsd_write %d %zu\n",
                reply.size, count);
         return -EINVAL;
     }
@@ -284,9 +294,13 @@ static ssize_t uvfsd_write(struct file* file,
 
 
 /* Used to signal the user-space filesystem to shutdown, cmd = 0 */
-
+#if (LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,35))
 static int uvfsd_ioctl(struct inode* inode, struct file* filp,
                        unsigned int cmd, unsigned long arg)
+#else
+static long uvfsd_unlocked_ioctl(struct file* filp,
+                       unsigned int cmd, unsigned long arg)
+#endif
 {
     switch (cmd)
     {
@@ -329,7 +343,11 @@ static int uvfsd_ioctl(struct inode* inode, struct file* filp,
         case UVFS_IOCTL_MOUNT:
         {
             // make sure nothing is mounted
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(3,7,0))
+            return !hlist_empty(&Uvfs_file_system_type.fs_supers);
+#else
             return !list_empty(&Uvfs_file_system_type.fs_supers);
+#endif
         }
         case UVFS_IOCTL_USE_COUNT:
         default:
@@ -435,6 +453,14 @@ static int __init uvfs_init(void)
 
     dprintk("<1>uvfs_init(/proc/%s)\n", UVFS_PROC_NAME);
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
+    uvfs_proc_file = proc_create(UVFS_PROC_NAME, S_IFREG | 0600, NULL, &Uvfsd_file_operations);
+    if (uvfs_proc_file == NULL)
+    {
+        dprintk("<1>Could not create /proc/%s\n", UVFS_PROC_NAME);
+        return -EIO;
+    }
+#else
     uvfs_proc_file = create_proc_entry(UVFS_PROC_NAME, S_IFREG | 0600, NULL);
     if (uvfs_proc_file == NULL)
     {
@@ -442,6 +468,7 @@ static int __init uvfs_init(void)
         return -EIO;
     }
     uvfs_proc_file->proc_fops = &Uvfsd_file_operations;
+#endif
     result = register_filesystem(&Uvfs_file_system_type);
     if (result < 0)
     {
@@ -450,8 +477,10 @@ static int __init uvfs_init(void)
     }
     if (uvfs_init_inodecache())
     {
+        dprintk("<1>uvfs_init exiting - -ENOMEM \n");
         return -ENOMEM;
     }
+    dprintk("<1>uvfs_init exited\n");
     return 0;
 }
 
