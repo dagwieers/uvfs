@@ -38,8 +38,13 @@ int uvfs_readlink(struct dentry *dentry, char *buffer, int buflen)
     request->type = UVFS_READLINK;
     request->serial = trans->serial;
     request->size = sizeof(*request);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+    request->uid = current_fsuid().val;
+    request->gid = current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = current_fsgid();
+#endif
     request->fh = UVFS_I(inode)->fh;
     uvfs_make_request(trans);
 
@@ -82,8 +87,13 @@ int uvfs_follow_link(struct dentry *dentry, struct nameidata *nd)
     request->type = UVFS_READLINK;
     request->serial = trans->serial;
     request->size = sizeof(*request);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+    request->uid = current_fsuid().val;
+    request->gid = current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = current_fsgid();
+#endif
     request->fh = UVFS_I(inode)->fh;
     uvfs_make_request(trans);
 

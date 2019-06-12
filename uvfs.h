@@ -2,7 +2,7 @@
  *   uvfs.h
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2012 Interwoven, Inc.
+ *   Copyright (C) 2004-2014 Hewlett-Packard Development Company, L.P.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -25,17 +25,20 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/sched.h>
+#include <linux/slab.h>
+#include <linux/security.h>
 #include <linux/version.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
 #include <linux/cred.h>
 #include <linux/exportfs.h>
+#include <linux/namei.h>
 #endif
 #include "protocol.h"
 
 #define UVFS_MODULE_NAME "pmfs"
 #define UVFS_PROC_NAME "fs/pmfs"
 #define UVFS_LICENSE "GPL"
-#define UVFS_VERSION "2.0.6-1"
+#define UVFS_VERSION "2.0.8"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
 #define current_fsuid() (current->fsuid)
@@ -78,17 +81,24 @@ typedef struct _uvfs_transaction_s
 #endif
 
 /* uvfs/dir.c */
-extern int uvfs_create(struct inode *, struct dentry *, int, struct nameidata *);
 extern int uvfs_lookup_by_name(struct inode*, struct qstr*, uvfs_fhandle_s*, uvfs_attr_s*);
-extern struct dentry* uvfs_lookup(struct inode *, struct dentry *, struct nameidata *);
 extern int uvfs_unlink(struct inode *, struct dentry *);
 extern int uvfs_symlink(struct inode *, struct dentry *, const char *);
-extern int uvfs_mkdir(struct inode *, struct dentry *, int);
 extern int uvfs_rmdir(struct inode *, struct dentry *);
 extern int uvfs_rename(struct inode *, struct dentry *, struct inode *, struct dentry *);
 extern int uvfs_readdir(struct file *, void *, filldir_t);
 extern int uvfs_open(struct inode *, struct file *);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+extern int uvfs_create(struct inode *, struct dentry *, umode_t, bool);
+extern struct dentry* uvfs_lookup(struct inode *, struct dentry *, unsigned int);
+extern int uvfs_mkdir(struct inode *, struct dentry *, umode_t);
+extern int uvfs_dentry_revalidate(struct dentry *, unsigned int);
+#else
+extern int uvfs_create(struct inode *, struct dentry *, int, struct nameidata *);
+extern struct dentry* uvfs_lookup(struct inode *, struct dentry *, struct nameidata *);
+extern int uvfs_mkdir(struct inode *, struct dentry *, int);
 extern int uvfs_dentry_revalidate(struct dentry *, struct nameidata *);
+#endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
 extern int uvfs_permission(struct inode *, int);
 #else
@@ -132,7 +142,11 @@ extern struct export_operations Uvfs_export_operations;
 extern void displayFhandle(const char *, uvfs_fhandle_s *);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
 extern int uvfs_statfs(struct dentry *, struct kstatfs *);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+extern struct dentry *  uvfs_get_sb(struct file_system_type *, int, const char *, void *);
+#else
 extern int uvfs_get_sb(struct file_system_type *, int, const char *, void *, struct vfsmount *);
+#endif
 #else
 extern int uvfs_statfs(struct super_block *, struct kstatfs *);
 extern struct super_block *uvfs_get_sb(struct file_system_type *, int, const char *, void *);
@@ -153,7 +167,11 @@ struct dentry *uvfs_fh_to_parent(struct super_block *, struct fid *, int, int);
 #else
 struct dentry *uvfs_decode_fh(struct super_block *, __u32 *, int, int, int (*)(void *, struct dentry*), void *);
 #endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+int uvfs_encode_fh(struct inode *inode, __u32 *fh, int *max_len, struct inode *parent);
+#else
 int uvfs_encode_fh(struct dentry *, __u32 *, int *, int);
+#endif
 struct dentry* uvfs_get_dentry(struct super_block *, void *);
 struct dentry* uvfs_get_parent(struct dentry *);
 

@@ -2,7 +2,7 @@
  *   dir.c -- directory operations
  *
  *   Copyright (C) 2002      Britt Park
- *   Copyright (C) 2004-2012 Interwoven, Inc.
+ *   Copyright (C) 2004-2014 Hewlett-Packard Development Company, L.P.
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -23,10 +23,17 @@
 
 /* Create a new regular file. */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+int uvfs_create(struct inode* dir,
+                struct dentry* entry,
+		umode_t mode,
+		bool unused)
+#else
 int uvfs_create(struct inode* dir,
                 struct dentry* entry,
                 int mode,
                 struct nameidata* idata)
+#endif
 {
     int retval = 0;
     uvfs_create_req_s* request;
@@ -53,8 +60,13 @@ int uvfs_create(struct inode* dir,
     memcpy(request->name, entry->d_name.name, entry->d_name.len);
     request->namelen = entry->d_name.len;
     request->fh = UVFS_I(dir)->fh;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+    request->uid = current_fsuid().val;
+    request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid.val : current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid : current_fsgid();
+#endif
     request->mode = mode;
     dprintk("uvfs_create: name %s  mode %o\n", entry->d_name.name, mode);
     uvfs_make_request(trans);
@@ -99,12 +111,14 @@ int uvfs_lookup_by_name(struct inode* dir, struct qstr* filename, uvfs_fhandle_s
     dprintk("<1>Entered uvfs_lookup_by_name: name=%s pid=%d\n", filename->name, current->pid);
     if (filename->len > UVFS_MAX_NAMELEN)
     {
+        dprintk("<1>Exited uvfs_lookup_by_name - ENAMETOOLONG\n");
         return -ENAMETOOLONG;
     }
 
     trans = uvfs_new_transaction();
     if (trans == NULL)
     {
+        dprintk("<1>Exited uvfs_lookup_by_name - ENOMEM\n");
         return -ENOMEM;
     }
     request = &trans->u.request.lookup;
@@ -113,8 +127,13 @@ int uvfs_lookup_by_name(struct inode* dir, struct qstr* filename, uvfs_fhandle_s
     request->size = offsetof(uvfs_lookup_req_s, name) + filename->len;
     memcpy(request->name, filename->name, filename->len);
     request->namelen = filename->len;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+    request->uid = current_fsuid().val;
+    request->gid = current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = current_fsgid();
+#endif
     request->fh = UVFS_I(dir)->fh;
     uvfs_make_request(trans);
 
@@ -124,13 +143,18 @@ int uvfs_lookup_by_name(struct inode* dir, struct qstr* filename, uvfs_fhandle_s
     retval = reply->error;
 
     kfree(trans);
+    dprintk("<1>Exited uvfs_lookup_by_name\n");
     return retval;
 }
 
 
 /* Lookup an entry in a directory, get its inode and fillin the dentry. */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+struct dentry* uvfs_lookup(struct inode* dir, struct dentry* entry, unsigned int unused)
+#else
 struct dentry* uvfs_lookup(struct inode* dir, struct dentry* entry, struct nameidata* idata)
+#endif
 {
     int err;
     uvfs_fhandle_s fh;
@@ -138,6 +162,7 @@ struct dentry* uvfs_lookup(struct inode* dir, struct dentry* entry, struct namei
     struct dentry * retval;
     struct inode * inode = 0;
 
+    dprintk("<1>Entered uvfs_lookup\n");
     err = uvfs_lookup_by_name(dir, &entry->d_name, &fh, &attr);
 
     if (err < 0)
@@ -173,11 +198,16 @@ struct dentry* uvfs_lookup(struct inode* dir, struct dentry* entry, struct namei
             retval = ERR_PTR(-ENOMEM);
         }
     }
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    if(inode)
+        retval = d_splice_alias(inode, entry);
+#else
     entry->d_op = &Uvfs_dentry_operations;
-
     retval = d_splice_alias(inode, entry);
+#endif
 
     dprintk("<1>uvfs_lookup: dentry at %p, dentry->d_inode at %p\n", entry, entry->d_inode);
+    dprintk("<1>Exited uvfs_lookup\n");
 
     return retval;
 }
@@ -207,8 +237,13 @@ int uvfs_unlink(struct inode* dir, struct dentry* entry)
     request->type = UVFS_UNLINK;
     request->serial = trans->serial;
     request->size = offsetof(uvfs_unlink_req_s, name) + entry->d_name.len;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
+    request->uid = current_fsuid().val;
+    request->gid = current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = current_fsgid();
+#endif
     request->fh = UVFS_I(dir)->fh;
     memcpy(request->name, entry->d_name.name, entry->d_name.len);
     request->namelen = entry->d_name.len;
@@ -218,7 +253,11 @@ int uvfs_unlink(struct inode* dir, struct dentry* entry)
     error = reply->error;
     if (error == 0)
     {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+	drop_nlink(entry->d_inode);
+#else
         entry->d_inode->i_nlink--;
+#endif
         dprintk("<1>uvfs_unlinked inode & = 0x%x %ld %s\n",
                 (unsigned)entry->d_inode,
                 entry->d_inode->i_ino,
@@ -249,25 +288,33 @@ int uvfs_symlink(struct inode* dir,
 
     if (entry->d_name.len > UVFS_MAX_NAMELEN)
     {
+        dprintk("<1>Exited uvfs_symlin - ENAMETOOLONG");
         return -ENAMETOOLONG;
     }
     pathlen = strlen(path);
     if (pathlen > UVFS_MAX_PATHLEN)
     {
+        dprintk("<1>Exited uvfs_symlin - ENAMETOOLONG");
         return -ENAMETOOLONG;
     }
 
     trans = uvfs_new_transaction();
     if (trans == NULL)
     {
+        dprintk("<1>Exited uvfs_symlin - ENOMEM");
         return -ENOMEM;
     }
     request = &trans->u.request.symlink;
     request->type = UVFS_SYMLINK;
     request->serial = trans->serial;
     request->size = sizeof(*request);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
+    request->uid = current_fsuid().val;
+    request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid.val : current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid : current_fsgid();
+#endif
     request->fh = UVFS_I(dir)->fh;
     memcpy(request->name, entry->d_name.name, entry->d_name.len);
     request->namelen = entry->d_name.len;
@@ -303,9 +350,15 @@ out:
 
 /* Make a directory. */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+int uvfs_mkdir(struct inode* dir,
+               struct dentry* entry,
+               umode_t mode)
+#else
 int uvfs_mkdir(struct inode* dir,
                struct dentry* entry,
                int mode)
+#endif
 {
     int error = 0;
     struct inode* inode;
@@ -333,8 +386,13 @@ int uvfs_mkdir(struct inode* dir,
     memcpy(request->name, entry->d_name.name, entry->d_name.len);
     request->namelen = entry->d_name.len;
     request->fh = UVFS_I(dir)->fh;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
+    request->uid = current_fsuid().val;
+    request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid.val : current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = (dir->i_mode & S_ISGID) ? dir->i_gid : current_fsgid();
+#endif
     request->mode = mode | S_IFDIR;
     if (dir->i_mode & S_ISGID)
         request->mode |= S_ISGID;
@@ -358,10 +416,15 @@ int uvfs_mkdir(struct inode* dir,
         goto out;
     }
     d_instantiate(entry, inode);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+    inc_nlink(dir);
+#else
     dir->i_nlink++;
+#endif
     dprintk("<1>Exited uvfs_mkdir 0x%x %ld\n", (unsigned)inode, inode->i_ino);
 out:
     kfree(trans);
+    dprintk("<1>Exited uvfs_mkdir\n");
     return error;
 }
 
@@ -380,20 +443,27 @@ int uvfs_rmdir(struct inode* dir, struct dentry* entry)
 
     if (entry->d_name.len > UVFS_MAX_NAMELEN)
     {
+        dprintk("<1>Exiting uvfs_rmdir - ENAMETOOLONG\n");
         return -ENAMETOOLONG;
     }
 
     trans = uvfs_new_transaction();
     if (trans == NULL)
     {
+    	dprintk("<1>Exiting uvfs_rmdir - ENOMEM\n");
         return -ENOMEM;
     }
     request = &trans->u.request.rmdir;
     request->type = UVFS_RMDIR;
     request->serial = trans->serial;
     request->size = offsetof(uvfs_rmdir_req_s, name) + entry->d_name.len;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
+    request->uid = current_fsuid().val;
+    request->gid = current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = current_fsgid();
+#endif
     request->fh = UVFS_I(dir)->fh;
     memcpy(request->name, entry->d_name.name, entry->d_name.len);
     request->namelen = entry->d_name.len;
@@ -403,8 +473,13 @@ int uvfs_rmdir(struct inode* dir, struct dentry* entry)
     error = reply->error;
     if (error == 0)
     {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+        set_nlink(entry->d_inode, entry->d_inode->i_nlink - 2);
+	drop_nlink(dir);
+#else
         entry->d_inode->i_nlink -= 2;
         dir->i_nlink--;
+#endif
     }
 
     /* translate an EREMOTE into an ENOTEMPTY for directory not empty */
@@ -435,19 +510,26 @@ int uvfs_rename(struct inode* srcdir,
     if (srcentry->d_name.len > UVFS_MAX_NAMELEN ||
         dstentry->d_name.len > UVFS_MAX_NAMELEN)
     {
+        dprintk("<1>Exited uvfs_rename-ENAMETOOLONG\n");
         return -ENAMETOOLONG;
     }
     trans = uvfs_new_transaction();
     if (trans == NULL)
     {
+        dprintk("<1>Exited uvfs_rename-ENOMEM\n");
         return -ENOMEM;
     }
     request = &trans->u.request.rename;
     request->type = UVFS_RENAME;
     request->serial = trans->serial;
     request->size = sizeof(*request);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
+    request->uid = current_fsuid().val;
+    request->gid = current_fsgid().val;
+#else
     request->uid = current_fsuid();
     request->gid = current_fsgid();
+#endif
     request->fh_old = UVFS_I(srcdir)->fh;
     memcpy(request->old_name, srcentry->d_name.name, srcentry->d_name.len);
     request->old_namelen = srcentry->d_name.len;
@@ -465,18 +547,32 @@ int uvfs_rename(struct inode* srcdir,
             struct inode* dnode = dstentry->d_inode;
             if (S_ISDIR(dnode->i_mode))
             {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+                set_nlink(dnode, dnode->i_nlink - 2);
+                drop_nlink(dstdir);
+#else
                 dnode->i_nlink -= 2;
                 dstdir->i_nlink--;
+#endif
             }
             else
             {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+                drop_nlink(dnode);
+#else
                 dnode->i_nlink--;
+#endif
             }
         }
         if (S_ISDIR(srcentry->d_inode->i_mode))
         {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+            inc_nlink(dstdir);
+	    drop_nlink(srcdir);
+#else
             dstdir->i_nlink++;
             srcdir->i_nlink--;
+#endif
         }
     }
 
@@ -514,8 +610,13 @@ int uvfs_readdir(struct file* filp,
         request->serial = trans->serial;
         request->size = sizeof(*request);
         request->entry_no = filp->f_pos;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)
+        request->uid = current_fsuid().val;
+        request->gid = current_fsgid().val;
+#else
         request->uid = current_fsuid();
         request->gid = current_fsgid();
+#endif
         request->fh = UVFS_I(dir)->fh;
         uvfs_make_request(trans);
 
@@ -524,6 +625,7 @@ int uvfs_readdir(struct file* filp,
         {
             int error = reply->error;
             kfree(trans);
+            dprintk("<1>Exited uvfs_readdir, error:%d\n", error);
             return error;
         }
         if (reply->count == 0)
@@ -565,16 +667,28 @@ full:
  * NOTE! The hit can be a negative hit too, don't assume
  * we have an inode!
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+int uvfs_dentry_revalidate(struct dentry * dentry, unsigned int flags)
+#else
 int uvfs_dentry_revalidate(struct dentry * dentry, struct nameidata * nd)
+#endif
 {
     int error = 0;
     uvfs_attr_s attr;
     uvfs_fhandle_s fh;
     struct inode *inode;
     struct dentry *parent;
+    dprintk("<1>Entered uvfs_dentry_revalidate\n");
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+    if (flags & LOOKUP_RCU)
+	    return -ECHILD;
+#endif
 
     parent = dget_parent(dentry);
+    dprintk("<1>uvfs_dentry_revalidate - Got Parent\n");
     inode = dentry->d_inode;
+    dprintk("<1>uvfs_dentry_revalidate - Got inode\n");
 
     /* always invalidate negative dentries */
     if (!inode)
@@ -585,6 +699,7 @@ int uvfs_dentry_revalidate(struct dentry * dentry, struct nameidata * nd)
     }
 
     error = uvfs_lookup_by_name(parent->d_inode, &dentry->d_name, &fh, &attr);
+    dprintk("<1>uvfs_dentry_revalidate - uvfs_lookup_by_name returned %d\n", error);
     if (error)
     {
         dprintk("uvfs_dentry_revalidate: %s/%s lookup error=%d\n",
@@ -610,9 +725,11 @@ int uvfs_dentry_revalidate(struct dentry * dentry, struct nameidata * nd)
 
 out:
     dput(parent);
+    dprintk("<1>Exited uvfs_dentry_revalidate - out\n");
     return 1;
 
 out_bad:
+    dprintk("<1>Exiting uvfs_dentry_revalidate - out_bad\n");
     if (inode && S_ISDIR(inode->i_mode)) {
         if (have_submounts(dentry))
             goto out;
@@ -620,9 +737,11 @@ out_bad:
     }
     d_drop(dentry);
     dput(parent);
+    dprintk("<1>Exited uvfs_dentry_revalidate - out_bad\n");
     return 0;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,5,0)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
 int uvfs_permission(struct inode *inode, int mask)
 #else
@@ -633,31 +752,42 @@ int uvfs_permission(struct inode *inode, int mask, struct nameidata *nd)
     uvfs_getattr_req_s* request;
     uvfs_getattr_rep_s* reply;
     uvfs_transaction_s* trans;
-    umode_t i_mode = inode->i_mode;
-    umode_t mode = inode->i_mode;
+    umode_t i_mode;
+    umode_t mode;
+
+    dprintk("<1>Entered uvfs_permission: node=%p, mask=%0x, mode=%X\n", inode, mask, inode->i_mode);
+    i_mode = inode->i_mode;
+    mode = inode->i_mode;
 
     mask &= MAY_READ | MAY_WRITE | MAY_EXEC;
-
     if (mask & MAY_WRITE) {
         /*
          * Nobody gets write access to a read-only fs.
          */
         if (IS_RDONLY(inode) &&
             (S_ISREG(mode) || S_ISDIR(mode) || S_ISLNK(mode)))
+        {
+       	    dprintk("<1>Exited uvfs_permission - EROFS\n");
             return -EROFS;
+        }
 
         /*
          * Nobody gets write access to an immutable file.
          */
         if (IS_IMMUTABLE(inode))
+        {
+            dprintk("<1>Exited uvfs_permission - EACCES\n");
             return -EACCES;
+        }
     }
 
+    dprintk("uvfs_permission: Before calling UVFS_GETATTR\n");
     if (current_fsuid() != UVFS_I(inode)->attr_uid)
     {
         trans = uvfs_new_transaction();
         if (trans == NULL)
         {
+	    dprintk("<1>Exited uvfs_permission - ENOMEM\n");
             return -ENOMEM;
         }
         request = &trans->u.request.getattr;
@@ -667,19 +797,23 @@ int uvfs_permission(struct inode *inode, int mask, struct nameidata *nd)
         request->uid = current_fsuid();
         request->gid = current_fsgid();
         request->fh = UVFS_I(inode)->fh;
+	dprintk("uvfs_permission: calling UVFS_GETATTR\n");
         uvfs_make_request(trans);
+	dprintk("uvfs_permission: UVFS_GETATTR call returned\n");
 
         reply = &trans->u.reply.getattr;
         error = reply->error;
         if (error)
         {
             kfree(trans);
+            dprintk("<1>Exited uvfs_permission with error: %d\n", error);
             return error;
         }
         i_mode = reply->a.i_mode;
         mode = reply->a.i_mode;
         kfree(trans);
     }
+    dprintk("uvfs_permission: After calling UVFS_GETATTR\n");
 
     if (current_fsuid() == inode->i_uid)
         mode >>= 6;
@@ -690,7 +824,10 @@ int uvfs_permission(struct inode *inode, int mask, struct nameidata *nd)
      * If the DACs are ok we don't need any capability check.
      */
     if (((mode & mask & (MAY_READ|MAY_WRITE|MAY_EXEC)) == mask))
+    {
+    	dprintk("<1>Exited uvfs_permission - DACs are OK\n");
         return 0;
+    }
 
     /*
      * Read/write DACs are always overridable.
@@ -698,14 +835,96 @@ int uvfs_permission(struct inode *inode, int mask, struct nameidata *nd)
      */
     if (!(mask & MAY_EXEC) || (i_mode & S_IXUGO) || S_ISDIR(i_mode))
         if (capable(CAP_DAC_OVERRIDE))
+        {
+            dprintk("<1>Exited uvfs_permission - DACs are overridable\n");
             return 0;
+        }
 
     /*
      * Searching includes executable on directories, else just read.
      */
     if (mask == MAY_READ || (S_ISDIR(i_mode) && !(mask & MAY_WRITE)))
         if (capable(CAP_DAC_READ_SEARCH))
+        {
+            dprintk("<1>Exited uvfs_permission - CAP_DAC_READ_SEARCH\n");
             return 0;
+        }
 
+    dprintk("<1>Exited uvfs_permission\n");
     return -EACCES;
 }
+#else
+int uvfs_do_getattr(struct inode *inode)
+{
+    int error = 0;
+    uvfs_getattr_req_s* request;
+    uvfs_getattr_rep_s* reply;
+    uvfs_transaction_s* trans;
+
+    dprintk("<1>Entered uvfs_do_getattr\n");
+
+    dprintk("uvfs_permission: Before calling UVFS_GETATTR\n");
+    if (current_fsuid().val != UVFS_I(inode)->attr_uid)
+    {
+        trans = uvfs_new_transaction();
+        if (trans == NULL)
+        {
+	    dprintk("<1>Exited uvfs_permission - ENOMEM\n");
+            return -ENOMEM;
+        }
+        request = &trans->u.request.getattr;
+        request->type = UVFS_GETATTR;
+        request->serial = trans->serial;
+        request->size = sizeof(*request);
+        request->uid = current_fsuid().val;
+        request->gid = current_fsgid().val;
+        request->fh = UVFS_I(inode)->fh;
+	dprintk("uvfs_permission: calling UVFS_GETATTR\n");
+        uvfs_make_request(trans);
+	dprintk("uvfs_permission: UVFS_GETATTR call returned\n");
+
+        reply = &trans->u.reply.getattr;
+        error = reply->error;
+        if (error)
+        {
+            kfree(trans);
+            dprintk("<1>Exited uvfs_permission with error: %d\n", error);
+            return error;
+        }
+        inode->i_mode = reply->a.i_mode;
+        kfree(trans);
+    }
+    dprintk("uvfs_permission: After calling UVFS_GETATTR\n");
+
+    return error;
+}
+int uvfs_perm_getattr(struct inode *inode, int mask)
+{
+	dprintk("<1>Entered uvfs_perm_getattr\n");
+	if (mask & MAY_NOT_BLOCK)
+	{
+		dprintk("<1>Exiting uvfs_perm_getattr MAY_NOT_BLOCK\n");
+		return -ECHILD;
+	}
+	return uvfs_do_getattr(inode);
+}
+int uvfs_permission(struct inode *inode, int mask)
+{
+	int err = 0;
+	dprintk("<1>Entered uvfs_permission: node=%p, mask=%0x, mode=%X\n", inode, mask, inode->i_mode);
+	err = generic_permission(inode, mask);
+
+	dprintk("uvfs_permission, after calling generic_permission, err=%d\n", err);
+	/* If permission is denied, try to refresh file
+	 * attributes.  This is also needed, because the root
+	 * node will at first have no permissions */
+	if (err == -EACCES) {
+		err = uvfs_perm_getattr(inode, mask);
+		dprintk("uvfs_permission, after calling uvfs_perm_getattr, err=%d\n", err);
+		if (!err)
+			err = generic_permission(inode, mask);
+	}
+	dprintk("<1>Exited uvfs_permission err=%d\n", err);
+	return err;
+}
+#endif

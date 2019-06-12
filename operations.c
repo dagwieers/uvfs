@@ -29,7 +29,12 @@ struct file_operations Uvfs_file_file_operations =
     .write          = uvfs_file_write,
     .mmap           = uvfs_file_mmap,
     .open           = generic_file_open,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+    .fsync          = generic_file_fsync,
+    .llseek         = generic_file_llseek,
+#else
     .fsync          = file_fsync,
+#endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
     .aio_read       = generic_file_aio_read,
     .aio_write      = generic_file_aio_write,
@@ -114,6 +119,10 @@ struct file_system_type Uvfs_file_system_type =
 {
     .owner          = THIS_MODULE,
     .name           = UVFS_MODULE_NAME,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+    .mount         = uvfs_get_sb,
+#else
     .get_sb         = uvfs_get_sb,
+#endif
     .kill_sb        = kill_anon_super,
 };
